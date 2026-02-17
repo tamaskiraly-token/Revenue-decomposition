@@ -156,7 +156,6 @@ export function VarianceBridge({ steps, viewType = 'monthly' }: VarianceBridgePr
 
       // Connector lines between bars (for waterfall effect)
       if (i > 0 && i < n - 1) {
-        const prev = series[i - 1];
         const currStart = s.start;
         const yConn = yScale(currStart);
         const x1 = x - gap;
