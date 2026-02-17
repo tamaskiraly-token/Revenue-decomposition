@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useMemo, useState } from 'react';
+import { useEffect, useRef, useMemo, useState } from 'react';
 import { DriverDetailModal, type ClientDetail } from './DriverDetailModal';
 
 export interface BridgeStep {
@@ -137,7 +137,6 @@ export function VarianceBridge({ steps, viewType = 'monthly' }: VarianceBridgePr
 
       const top = Math.min(y0, y1);
       const height = Math.abs(y1 - y0);
-      const zeroY = yScale(0);
 
       // Bar with rounded top
       const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
@@ -158,7 +157,6 @@ export function VarianceBridge({ steps, viewType = 'monthly' }: VarianceBridgePr
       // Connector lines between bars (for waterfall effect)
       if (i > 0 && i < n - 1) {
         const prev = series[i - 1];
-        const prevEnd = prev.isTotal ? prev.value : prev.end;
         const currStart = s.start;
         const yConn = yScale(currStart);
         const x1 = x - gap;

@@ -358,8 +358,8 @@ function generateSingleMonthData(month: string, clientType: 'existing-clients' |
   }
   
   // Check for clients that went live on time
-  const timingDetails = driverMap['Timing']?.clientDetails || [];
-  const onTimeClients = timingDetails.filter(cd => cd.daysDelay !== undefined && cd.daysDelay <= 0);
+  const timingDetails = driverMap['Timing'] || [];
+  const onTimeClients = timingDetails.filter((cd: ClientDetail) => cd.daysDelay !== undefined && cd.daysDelay <= 0);
   if (onTimeClients.length > 0 && timingDetails.length > 0) {
     const onTimeCount = onTimeClients.length;
     insights.push({
@@ -391,9 +391,9 @@ function generateSingleMonthData(month: string, clientType: 'existing-clients' |
   }
   
   if (churn < 0) {
-    const churnDetails = driverMap['Unknown churn']?.clientDetails || [];
+    const churnDetails = driverMap['Unknown churn'] || [];
     if (churnDetails.length > 0) {
-      const churnReasons = churnDetails.map(cd => cd.churnReason).filter(Boolean);
+      const churnReasons = churnDetails.map((cd: ClientDetail) => cd.churnReason).filter(Boolean);
       const topReason = churnReasons[0] || 'contract cancellations';
       insights.push({
         type: 'negative',

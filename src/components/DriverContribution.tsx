@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { ViewType } from './VarianceBridge';
 import { DriverDetailModal, type ClientDetail } from './DriverDetailModal';
 
