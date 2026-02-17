@@ -46,14 +46,14 @@ export function VarianceBridge({ steps, viewType = 'monthly' }: VarianceBridgePr
 
     const svg = svgRef.current;
     const W = 1200;
-    const H = 400;
+    const H = 600; // Increased height for better vertical space utilization
     svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
     svg.innerHTML = '';
 
-    const padL = 60;
+    const padL = 80;
     const padR = 40;
-    const padT = 40;
-    const padB = 60;
+    const padT = 50;
+    const padB = 80;
     const innerW = W - padL - padR;
     const innerH = H - padT - padB;
 
@@ -236,9 +236,9 @@ export function VarianceBridge({ steps, viewType = 'monthly' }: VarianceBridgePr
           </div>
         </div>
       </div>
-      <div className="sales-chart-body" style={{ padding: '24px' }}>
+      <div className="sales-chart-body" style={{ padding: '24px', minHeight: '650px' }}>
         <div style={{ width: '100%', overflow: 'auto', paddingBottom: '6px' }}>
-          <svg ref={svgRef} width="1200" height="400" viewBox="0 0 1200 400" style={{ display: 'block' }}></svg>
+          <svg ref={svgRef} width="1200" height="600" viewBox="0 0 1200 600" style={{ display: 'block', width: '100%', height: 'auto', maxHeight: '600px' }}></svg>
         </div>
         <div style={{ display: 'flex', justifyContent: 'center', flexWrap: 'wrap', gap: '16px', marginTop: '20px', fontSize: '12px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
