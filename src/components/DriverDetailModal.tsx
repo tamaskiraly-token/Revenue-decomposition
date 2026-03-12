@@ -34,10 +34,8 @@ interface DriverDetailModalProps {
 }
 
 export function DriverDetailModal({ driverName, driverValue, clientDetails, onClose, planFX = 1.0 }: DriverDetailModalProps) {
-  // Safety check
-  if (!clientDetails || !Array.isArray(clientDetails) || clientDetails.length === 0) {
-    return null;
-  }
+  if (!clientDetails || !Array.isArray(clientDetails)) return null;
+  const isEmpty = clientDetails.length === 0;
 
   const formatMoney = (x: number, cur = '$') => {
     if (isNaN(x) || !isFinite(x)) return '$0';
@@ -82,11 +80,12 @@ export function DriverDetailModal({ driverName, driverValue, clientDetails, onCl
     return raw;
   };
 
-  // Filter: invalid rows; for Fixed fee only show rows where TOTAL !== 0
+  // Filter: invalid rows; for Fixed fee only show rows where TOTAL !== 0; for Price only show rows where revenue impact !== 0
   const sortedDetails = useMemo(() => {
     const list = clientDetails.filter(d => {
       if (!d || !d.clientName || !isFinite(d.variance)) return false;
       if (isFixedFee && d.variance === 0) return false;
+      if (isPrice && (d.variance ?? 0) === 0) return false;
       return true;
     });
     return [...list].sort((a, b) => {
@@ -94,11 +93,7 @@ export function DriverDetailModal({ driverName, driverValue, clientDetails, onCl
       const vb = getSortVariance(b);
       return totalSortOrder === 'desc' ? vb - va : va - vb;
     });
-  }, [clientDetails, isFixedFee, totalSortOrder]);
-
-  if (sortedDetails.length === 0) {
-    return null;
-  }
+  }, [clientDetails, isFixedFee, isPrice, totalSortOrder]);
 
   const totalVariance = sortedDetails.reduce((sum, d) => sum + (d.variance || 0), 0);
 
@@ -116,25 +111,27 @@ export function DriverDetailModal({ driverName, driverValue, clientDetails, onCl
             ✕
           </button>
         </div>
-        <div style={{ padding: '8px 24px', borderBottom: '1px solid var(--sales-border)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <span style={{ fontSize: '12px', color: 'var(--sales-text-secondary)' }}>Sort by TOTAL:</span>
-          <button
-            type="button"
-            onClick={() => setTotalSortOrder(prev => prev === 'desc' ? 'asc' : 'desc')}
-            style={{
-              padding: '6px 12px',
-              fontSize: '12px',
-              border: '1px solid var(--sales-border)',
-              borderRadius: 'var(--sales-radius-sm)',
-              background: 'var(--sales-surface)',
-              color: 'var(--sales-accent)',
-              fontWeight: '600',
-              cursor: 'pointer',
-            }}
-          >
-            {totalSortOrder === 'desc' ? 'Descending ↓' : 'Ascending ↑'}
-          </button>
-        </div>
+        {!isPrice && !isEmpty && (
+          <div style={{ padding: '8px 24px', borderBottom: '1px solid var(--sales-border)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{ fontSize: '12px', color: 'var(--sales-text-secondary)' }}>Sort by TOTAL:</span>
+            <button
+              type="button"
+              onClick={() => setTotalSortOrder(prev => prev === 'desc' ? 'asc' : 'desc')}
+              style={{
+                padding: '6px 12px',
+                fontSize: '12px',
+                border: '1px solid var(--sales-border)',
+                borderRadius: 'var(--sales-radius-sm)',
+                background: 'var(--sales-surface)',
+                color: 'var(--sales-accent)',
+                fontWeight: '600',
+                cursor: 'pointer',
+              }}
+            >
+              {totalSortOrder === 'desc' ? 'Descending ↓' : 'Ascending ↑'}
+            </button>
+          </div>
+        )}
         <div className="sales-modal-body">
           <div style={{ marginBottom: '16px', fontSize: '12px', color: 'var(--sales-text-secondary)', lineHeight: '1.5' }}>
             {isVolume && 'This breakdown shows transaction volume differences per client. Higher volume increases revenue, lower volume decreases it.'}
@@ -144,9 +141,14 @@ export function DriverDetailModal({ driverName, driverValue, clientDetails, onCl
             {isFX && 'This breakdown shows FX rate impact per client. FX rate changes affect revenue when converting from local to reporting currency.'}
             {isFixedFee && 'This breakdown shows the difference between plan and actual fixed fee component of revenue by client.'}
             {!isVolume && !isPrice && !isTiming && !isChurn && !isFX && !isFixedFee && `This breakdown shows how ${driverName.toLowerCase()} variance is distributed across clients.`}
-            {isFixedFee ? ' Only rows with non-zero TOTAL are shown.' : ' Use the button above to sort by TOTAL (Revenue Impact).'}
+            {isFixedFee ? ' Only rows with non-zero TOTAL are shown.' : isPrice ? '' : ' Use the button above to sort by TOTAL (Revenue Impact).'}
           </div>
           <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(90vh - 220px)' }}>
+            {isEmpty ? (
+              <div style={{ padding: '48px 24px', textAlign: 'center', color: 'var(--sales-muted)', fontSize: '14px' }}>
+                No breakdown data available for this driver. The sheet might have a different structure, or there is no data yet.
+              </div>
+            ) : (
             <table className="sales-modal-table sales-modal-table--compact" style={{ width: '100%' }}>
               <thead>
                 <tr>
@@ -180,9 +182,12 @@ export function DriverDetailModal({ driverName, driverValue, clientDetails, onCl
                   )}
                   {isChurn && (
                     <>
-                      <th style={{ width: '25%', textAlign: 'left' }}>Reason</th>
-                      <th style={{ width: '18%', textAlign: 'right' }}>Lost Revenue</th>
-                      <th style={{ width: '12%', textAlign: 'right' }}>Impact %</th>
+                      <th style={{ width: '12%', textAlign: 'left' }}>Currency</th>
+                      <th style={{ width: '12%', textAlign: 'left' }}>Revenue component</th>
+                      <th style={{ width: '12%', textAlign: 'right' }}>Amount (Act)</th>
+                      <th style={{ width: '12%', textAlign: 'right' }}>Amount (Plan)</th>
+                      <th style={{ width: '12%', textAlign: 'right' }}>TOTAL</th>
+                      <th style={{ width: '20%', textAlign: 'left' }}>Comment</th>
                     </>
                   )}
                   {isFX && (
@@ -221,8 +226,9 @@ export function DriverDetailModal({ driverName, driverValue, clientDetails, onCl
                   const volumeDelta = isVolume
                     ? (detail.actualVolume ?? detail.actualValue ?? 0) - (detail.planVolume ?? detail.planValue ?? 0)
                     : 0;
+                  const planPriceForPct = detail.planPrice ?? detail.planValue ?? 0;
                   const priceDelta = isPrice
-                    ? (detail.actualPrice ?? detail.actualValue ?? 0) - (detail.planPrice ?? detail.planValue ?? 0)
+                    ? (detail.actualPrice ?? detail.actualValue ?? 0) - planPriceForPct
                     : 0;
                   const rawVariance = detail.variance ?? 0;
                   const impactSignFromDelta = isVolume ? (volumeDelta < 0 ? -1 : 1) : isPrice ? (priceDelta < 0 ? -1 : 1) : null;
@@ -280,14 +286,14 @@ export function DriverDetailModal({ driverName, driverValue, clientDetails, onCl
                             fontWeight: '700',
                             color: cls === 'pos' ? '#0d9488' : '#dc2626'
                           }}>
-                            {(displayVariance > 0 ? '+' : '')}{formatPrice(displayVariance)}
+                            {(priceDelta > 0 ? '+' : '')}{formatPrice(priceDelta)}
                           </td>
                           <td className={`num ${cls}`} style={{
                             textAlign: 'right',
                             fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif',
                             color: cls === 'pos' ? '#0d9488' : '#dc2626'
                           }}>
-                            {formatPct(detail.variancePct != null && impactSignFromDelta === -1 ? -Math.abs(detail.variancePct) : (detail.variancePct || 0))}
+                            {formatPct(planPriceForPct !== 0 ? priceDelta / planPriceForPct : 0)}
                           </td>
                           <td className={`num ${cls}`} style={{
                             textAlign: 'right',
@@ -330,24 +336,23 @@ export function DriverDetailModal({ driverName, driverValue, clientDetails, onCl
                       )}
                       {isChurn && (
                         <>
-                          <td style={{ color: 'var(--sales-text-secondary)', fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif' }}>
-                            {detail.churnReason ?? '—'}
+                          <td style={{ fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif' }}>{detail.currency ?? '—'}</td>
+                          <td style={{ fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif' }}>{detail.revenueComponent ?? '—'}</td>
+                          <td className="num" style={{ textAlign: 'right', fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif' }}>
+                            {detail.actualValue != null && isFinite(detail.actualValue) ? formatMoney(detail.actualValue) : '—'}
+                          </td>
+                          <td className="num" style={{ textAlign: 'right', fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif' }}>
+                            {detail.planValue != null && isFinite(detail.planValue) ? formatMoney(detail.planValue) : '—'}
                           </td>
                           <td className={`num ${cls}`} style={{ 
                             textAlign: 'right', 
                             fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif',
                             fontWeight: '700',
-                            color: '#dc2626'
+                            color: cls === 'pos' ? '#0d9488' : '#dc2626'
                           }}>
-                            {formatMoney(Math.abs(detail.variance || 0))}
+                            {detail.variance != null && isFinite(detail.variance) ? formatMoney(detail.variance) : '—'}
                           </td>
-                          <td className={`num ${cls}`} style={{ 
-                            textAlign: 'right', 
-                            fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif',
-                            color: '#dc2626'
-                          }}>
-                            {formatPct(Math.abs(detail.variancePct || 0))}
-                          </td>
+                          <td style={{ fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif', color: 'var(--sales-text-secondary)' }}>{detail.churnReason ?? detail.comment ?? '—'}</td>
                         </>
                       )}
                       {isFX && (
@@ -429,6 +434,7 @@ export function DriverDetailModal({ driverName, driverValue, clientDetails, onCl
                   );
                 })}
               </tbody>
+              {!isPrice && (
               <tfoot>
                 <tr style={{ borderTop: '2px solid var(--sales-border)', fontWeight: '700' }}>
                   <td style={{ fontWeight: '700', color: 'var(--sales-text)' }}>Total</td>
@@ -519,13 +525,16 @@ export function DriverDetailModal({ driverName, driverValue, clientDetails, onCl
                   {isChurn && (
                     <>
                       <td></td>
-                      <td className={`num`} style={{ 
+                      <td></td>
+                      <td></td>
+                      <td></td>
+                      <td className={`num ${totalVariance >= 0 ? 'pos' : 'neg'}`} style={{ 
                         textAlign: 'right', 
                         fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif',
                         fontWeight: '700',
-                        color: '#dc2626'
+                        color: totalVariance >= 0 ? '#0d9488' : '#dc2626'
                       }}>
-                        {formatMoney(Math.abs(totalVariance))}
+                        {formatMoney(totalVariance)}
                       </td>
                       <td></td>
                     </>
@@ -568,7 +577,9 @@ export function DriverDetailModal({ driverName, driverValue, clientDetails, onCl
                   )}
                 </tr>
               </tfoot>
+              )}
             </table>
+            )}
           </div>
         </div>
       </div>

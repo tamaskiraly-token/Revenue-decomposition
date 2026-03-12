@@ -4,9 +4,9 @@
 
 import type { RevenueData } from './mockData';
 import { generateRevenueData } from './mockData';
-import { WATERFALL_GIDS, PUB_WATERFALL_URLS, BREAKDOWN_GIDS, STEP_LABELS_WITH_BREAKDOWN } from '../config/sheets';
+import { WATERFALL_GIDS, PUB_WATERFALL_URLS, BREAKDOWN_GIDS, STEP_LABELS_WITH_BREAKDOWN, INSIGHTS_GID } from '../config/sheets';
 import type { ClientType } from '../config/sheets';
-import { fetchSheetCsv, fetchSheetCsvByUrl, parseWaterfallCsv, parseBreakdownCsv, parseFixedFeeBreakdownCsv } from './googleSheets';
+import { fetchSheetCsv, fetchSheetCsvByUrl, parseWaterfallCsv, parseBreakdownCsv, parseFixedFeeBreakdownCsv, parseInsightsCsv } from './googleSheets';
 
 const BRIDGE_ORDER = ['Plan', 'Fixed fee difference', 'Volume', 'Price', 'Timing', 'Unknown churn', 'FX', 'Residual', 'Actual'];
 
@@ -122,11 +122,27 @@ export async function loadRevenueData(
     return tryLoadCumulative(csv, viewType);
   };
 
+  const mergeInsights = async (data: RevenueData): Promise<RevenueData> => {
+    try {
+      const insightsCsv = await fetchSheetCsv(INSIGHTS_GID);
+      const insights = parseInsightsCsv(insightsCsv);
+      if (insights.length > 0) {
+        return { ...data, insights };
+      }
+    } catch (e) {
+      console.warn('Failed to load insights sheet:', e);
+    }
+    return data;
+  };
+
   // 1) Try export URL with GID first
   try {
     const csv = await fetchSheetCsv(gid);
     const result = await tryLoad(csv);
-    if (result) return result;
+    if (result) {
+      const dataWithInsights = await mergeInsights(result.data);
+      return { data: dataWithInsights, source: result.source };
+    }
   } catch (e) {
     console.warn('GID export failed, trying pub URL:', e);
   }
@@ -136,13 +152,18 @@ export async function loadRevenueData(
     try {
       const csv = await fetchSheetCsvByUrl(pubUrl);
       const result = await tryLoad(csv);
-      if (result) return result;
+      if (result) {
+        const dataWithInsights = await mergeInsights(result.data);
+        return { data: dataWithInsights, source: result.source };
+      }
     } catch (e) {
       console.warn('Pub URL fetch failed:', e);
     }
   }
 
-  return { data: generateRevenueData(month, clientType, viewType), source: 'mock' };
+  const mockData = generateRevenueData(month, clientType, viewType);
+  const dataWithInsights = await mergeInsights(mockData);
+  return { data: dataWithInsights, source: 'mock' };
 }
 
 export interface ContributorByClient {

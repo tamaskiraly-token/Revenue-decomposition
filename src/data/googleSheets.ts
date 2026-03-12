@@ -55,11 +55,12 @@ function parseNum(val: string): number {
   return negative ? -n : n;
 }
 
-/** Map sheet row labels to dashboard step labels (existing customers waterfall). */
+/** Map sheet row labels to dashboard step labels (existing and new customers waterfall). */
 const ROW_LABEL_TO_STEP: Record<string, string> = {
   'Plan': 'Plan',
   'Fixed fee diff.': 'Fixed fee difference',
   'Fixed fee diff': 'Fixed fee difference',
+  'Fixed fee': 'Fixed fee difference',
   'Fixed fee difference': 'Fixed fee difference',
   'Volume impact': 'Volume',
   'Volume': 'Volume',
@@ -69,6 +70,7 @@ const ROW_LABEL_TO_STEP: Record<string, string> = {
   'FX': 'FX',
   'Timing': 'Timing',
   'Unknown churn': 'Unknown churn',
+  'Churn': 'Unknown churn',
   'Residual': 'Residual',
   'Other': 'Residual',
   'Actual': 'Actual',
@@ -144,11 +146,37 @@ export function parseWaterfallCsv(csv: string, monthKey?: string): BridgeStepFro
     const monthNum = parts.length === 2 ? parseInt(parts[1], 10) : 0;
     if (monthNum >= 1 && monthNum <= 12) {
       const headerRow = rows[0] ?? [];
-      const janIdx = headerRow.findIndex(c => /january|jan/i.test((c ?? '').trim()));
-      if (janIdx >= 0) {
-        dataCol = janIdx + (monthNum - 1);
+      const headerRow2 = (rows[1] ?? []).map((c: string) => (c ?? '').trim().toLowerCase());
+      const monthNames: Record<number, RegExp[]> = {
+        1: [/^january$/i, /^jan\b/i, /\/01\//, /^01\//],
+        2: [/^february$/i, /^feb\b/i, /\/02\//, /^02\//],
+        3: [/^march$/i, /^mar\b/i, /\/03\//, /^03\//],
+        4: [/^april$/i, /^apr\b/i, /\/04\//, /^04\//],
+        5: [/^may$/i, /\/05\//, /^05\//],
+        6: [/^june$/i, /^jun\b/i, /\/06\//, /^06\//],
+        7: [/^july$/i, /^jul\b/i, /\/07\//, /^07\//],
+        8: [/^august$/i, /^aug\b/i, /\/08\//, /^08\//],
+        9: [/^september$/i, /^sep\b/i, /\/09\//, /^09\//],
+        10: [/^october$/i, /^oct\b/i, /\/10\//, /^10\//],
+        11: [/^november$/i, /^nov\b/i, /\/11\//, /^11\//],
+        12: [/^december$/i, /^dec\b/i, /\/12\//, /^12\//],
+      };
+      const regexes = monthNames[monthNum as keyof typeof monthNames] ?? [/jan/i];
+      const findMonthCol = (row: string[]): number => {
+        const idx = row.findIndex((c: string) => regexes.some(re => re.test((c ?? '').trim())));
+        return idx;
+      };
+      let monthCol = findMonthCol(headerRow);
+      if (monthCol < 0) monthCol = findMonthCol(headerRow2);
+      if (monthCol >= 0) {
+        dataCol = monthCol;
       } else {
-        dataCol = monthNum;
+        const janIdx = headerRow.findIndex((c: string) => /january|jan\b/i.test((c ?? '').trim()));
+        if (janIdx >= 0) {
+          dataCol = janIdx + (monthNum - 1);
+        } else {
+          dataCol = monthNum;
+        }
       }
     }
   }
@@ -190,7 +218,7 @@ export function parseWaterfallCsv(csv: string, monthKey?: string): BridgeStepFro
   if (steps.length === 0 && rows.length > 1) {
     let planRow = -1;
     let labelCol = 0;
-    let janCol = 1;
+    let janCol = -1;
     for (let r = 0; r < rows.length; r++) {
       const row = rows[r];
       for (let c = 0; c < row.length; c++) {
@@ -203,16 +231,29 @@ export function parseWaterfallCsv(csv: string, monthKey?: string): BridgeStepFro
       }
       if (planRow >= 0) break;
     }
+    const monthNum = monthKey ? parseInt(monthKey.split('-')[1], 10) : 1;
+    const monthRegexes: RegExp[] = [
+      /january|^jan\b/i, /february|^feb\b/i, /march|^mar\b/i, /april|^apr\b/i,
+      /^may\b/i, /june|^jun\b/i, /july|^jul\b/i, /august|^aug\b/i,
+      /september|^sep\b/i, /october|^oct\b/i, /november|^nov\b/i, /december|^dec\b/i,
+    ];
+    const targetRe = monthRegexes[monthNum - 1] ?? /january|jan/i;
     for (let r = 0; r < rows.length; r++) {
       const row = rows[r];
-      const idx = row.findIndex(c => /^january$/i.test((c ?? '').trim()));
-      if (idx >= 0) {
-        janCol = idx;
-        break;
+      for (let c = 0; c < row.length; c++) {
+        const cell = (row[c] ?? '').trim();
+        if (targetRe.test(cell) || (monthNum === 1 && /^january$/i.test(cell))) {
+          janCol = c;
+          break;
+        }
       }
+      if (janCol >= 0) break;
     }
-    const monthNum = monthKey ? parseInt(monthKey.split('-')[1], 10) : 1;
-    const valueCol = monthNum >= 1 && monthNum <= 12 ? janCol + (monthNum - 1) : janCol;
+    if (janCol < 0) {
+      const janIdx = rows[0]?.findIndex((c: string) => /^january$/i.test((c ?? '').trim())) ?? -1;
+      janCol = janIdx >= 0 ? janIdx + (monthNum - 1) : monthNum;
+    }
+    const valueCol = janCol >= 0 ? janCol : 1;
     if (planRow >= 0) {
       for (let r = planRow; r < rows.length; r++) {
         const row = rows[r];
@@ -250,14 +291,15 @@ export function parseBreakdownCsv(csv: string, driverName: string): ClientDetail
   let headerRow = 0;
   for (let r = 0; r < Math.min(rows.length, 15); r++) {
     const row = rows[r].map(h => (h || '').trim().toLowerCase());
-    const hasClient = row.some(h => h === 'client' || h === 'client name');
+    const hasClient = row.some(h => h === 'client' || h === 'client name' || h === 'customer');
     if (hasClient) {
       headerRow = r;
       break;
     }
   }
   const header = rows[headerRow].map(h => (h || '').trim().toLowerCase());
-  const clientCol = header.findIndex(h => h === 'client' || h === 'client name');
+  const isChurn = driverName.toLowerCase().includes('churn');
+  const clientCol = header.findIndex(h => h === 'client' || h === 'client name' || (isChurn && (h === 'customer' || h === 'name')));
   if (clientCol < 0) return [];
 
   const driver = driverName.toLowerCase();
@@ -269,6 +311,8 @@ export function parseBreakdownCsv(csv: string, driverName: string): ClientDetail
   const actualCol = header.findIndex(h => h === 'actual' || h === 'actual value' || h === 'actual volume' || h === 'actual price');
   const varCol = header.findIndex(h => h === 'variance' || h === 'var' || h.includes('revenue impact') || h.includes('impact') || h === 'contribution');
   const varPctCol = header.findIndex(h => (h.includes('variance') && h.includes('%')) || h === 'var %');
+  // Churn sheets often use "Amount", "Value", or "Revenue" for the impact value
+  const amountCol = isChurn ? header.findIndex(h => h === 'amount' || h === 'value' || (h.includes('revenue') && !h.includes('local'))) : -1;
 
   // Driver-specific columns
   const planVolumeCol = header.findIndex(h => h.includes('plan') && h.includes('volume'));
@@ -288,8 +332,8 @@ export function parseBreakdownCsv(csv: string, driverName: string): ClientDetail
   const pCol = planCol >= 0 ? planCol : planVolumeCol >= 0 ? planVolumeCol : planPriceCol >= 0 ? planPriceCol : 1;
   const aCol = actualCol >= 0 ? actualCol : actualVolumeCol >= 0 ? actualVolumeCol : actualPriceCol >= 0 ? actualPriceCol : valueCol;
 
-  // Revenue impact: prefer TOTAL column when present; fall back to Variance/Impact column so negatives aren't lost
-  const varianceCol = totalCol >= 0 ? totalCol : varCol;
+  // Revenue impact: prefer TOTAL column when present; fall back to Variance/Impact column; for churn also try Amount/Value
+  const varianceCol = totalCol >= 0 ? totalCol : varCol >= 0 ? varCol : amountCol;
 
   const dataStartRow = headerRow + 1;
   const details: ClientDetail[] = [];
@@ -302,6 +346,7 @@ export function parseBreakdownCsv(csv: string, driverName: string): ClientDetail
     const actualValue = parseNum(row[aCol] || '');
     let variance = varianceCol >= 0 ? parseNum(row[varianceCol] || '') : NaN;
     if (!isFinite(variance) && varCol >= 0) variance = parseNum(row[varCol] || '');
+    if (!isFinite(variance) && amountCol >= 0) variance = parseNum(row[amountCol] || '');
     if (!isFinite(variance)) variance = (isFinite(actualValue) && isFinite(planValue) ? actualValue - planValue : parseNum(row[valueCol] || ''));
     const variancePct = varPctCol >= 0 ? parseNum(row[varPctCol] || '') / 100 : (planValue !== 0 && isFinite(variance) ? variance / Math.abs(planValue) : 0);
 
@@ -429,4 +474,118 @@ export function parseFixedFeeBreakdownCsv(csv: string, monthKey: string): Client
     });
   }
   return details.filter(d => d.clientName);
+}
+
+/**
+ * Parse Unknown churn breakdown sheet. Same layout as Fixed fee: month blocks with date in row above,
+ * columns: Client, Currency, Revenue component, Amount (Act), Amount (Plan), TOTAL, Comment.
+ */
+export function parseChurnBreakdownCsv(csv: string, monthKey: string): ClientDetail[] {
+  const rows = parseCsv(csv);
+  if (rows.length < 2) return [];
+
+  const monthNum = monthKey ? parseInt(monthKey.split('-')[1], 10) : 1;
+  if (!(monthNum >= 1 && monthNum <= 12)) return [];
+
+  let headerRow = -1;
+  for (let r = 0; r < Math.min(rows.length, 15); r++) {
+    const row = rows[r].map(c => (c ?? '').trim().toLowerCase());
+    const hasClient = row.some(c => c === 'client');
+    const hasTotal = row.some(c => c === 'total');
+    const hasAmount = row.some(c => c.includes('amount'));
+    if (hasClient && (hasTotal || hasAmount)) {
+      headerRow = r;
+      break;
+    }
+  }
+  if (headerRow < 0) return [];
+
+  const header = rows[headerRow].map(c => (c ?? '').trim());
+  const dateRow = headerRow > 0 ? rows[headerRow - 1].map(c => (c ?? '').trim()) : [];
+  const clientCols = header.map((h, i) => ((h || '').toLowerCase() === 'client' ? i : -1)).filter(i => i >= 0);
+  let blockStart = -1;
+  for (const c of clientCols) {
+    const dateCell = (dateRow[c] ?? '').trim().toLowerCase();
+    const isJan = /january|jan\b|31\/01|01\/01|\/01\/|^01\//.test(dateCell);
+    const isFeb = /february|feb\b|28\/02|02\/02|\/02\/|^02\//.test(dateCell);
+    const isMar = /march|mar\b|31\/03|03\/03|\/03\/|^03\//.test(dateCell);
+    if ((monthNum === 1 && isJan) || (monthNum === 2 && isFeb) || (monthNum === 3 && isMar)) {
+      blockStart = c;
+      break;
+    }
+  }
+  if (blockStart < 0 && clientCols.length > 0) blockStart = clientCols[Math.min(monthNum - 1, clientCols.length - 1)];
+  if (blockStart < 0) return [];
+
+  // Churn: Client, Currency, Revenue component, Amount (Act), Amount (Plan), TOTAL, Comment
+  const clientCol = blockStart;
+  const currencyCol = blockStart + 1;
+  const revenueComponentCol = blockStart + 2;
+  const amountActCol = blockStart + 3;
+  const amountPlanCol = blockStart + 4;
+  const totalCol = blockStart + 5;
+  const commentCol = blockStart + 6;
+
+  const details: ClientDetail[] = [];
+  for (let r = headerRow + 1; r < rows.length; r++) {
+    const rowData = rows[r];
+    const clientName = (rowData[clientCol] ?? '').trim();
+    if (!clientName) continue;
+
+    const planValue = parseNum(rowData[amountPlanCol] ?? '');
+    const actualValue = parseNum(rowData[amountActCol] ?? '');
+    const variance = parseNum(rowData[totalCol] ?? '');
+    const plan = isFinite(planValue) ? planValue : NaN;
+    const actual = isFinite(actualValue) ? actualValue : NaN;
+    const variancePct = plan !== 0 && isFinite(plan) ? (isFinite(variance) ? variance / Math.abs(plan) : 0) : 0;
+
+    details.push({
+      clientName,
+      planValue: plan,
+      actualValue: actual,
+      variance: isFinite(variance) ? variance : 0,
+      variancePct: isFinite(variancePct) ? variancePct : 0,
+      currency: (rowData[currencyCol] ?? '').trim() || undefined,
+      revenueComponent: (rowData[revenueComponentCol] ?? '').trim() || undefined,
+      churnReason: (rowData[commentCol] ?? '').trim() || undefined,
+    });
+  }
+  return details.filter(d => d.clientName);
+}
+
+/** Insight for Key Insights & Highlights section */
+export interface InsightFromSheet {
+  type: 'positive' | 'negative';
+  text: string;
+}
+
+/**
+ * Insights sheet layout (GID 1794114721):
+ * - Column E (index 4): Positive comments, starting row 10 (E10, E11, E12...)
+ * - Column F (index 5): Negative comments, starting row 10 (F10, F11, F12...)
+ */
+const INSIGHTS_POS_COL = 4;  // E
+const INSIGHTS_NEG_COL = 5;  // F
+const INSIGHTS_START_ROW = 9; // 0-based (row 10 in sheet)
+
+export function parseInsightsCsv(csv: string): InsightFromSheet[] {
+  const rows = parseCsv(csv);
+  const insights: InsightFromSheet[] = [];
+
+  const isSheetError = (s: string) => /^#(REF!|VALUE!|N\/A|NULL!|DIV\/0!|NAME\?)$/i.test(s.trim());
+
+  for (let r = INSIGHTS_START_ROW; r < rows.length; r++) {
+    const row = rows[r];
+    const posText = (row[INSIGHTS_POS_COL] ?? '').trim();
+    const negText = (row[INSIGHTS_NEG_COL] ?? '').trim();
+
+    if (posText && posText.length >= 2 && !isSheetError(posText)) {
+      insights.push({ type: 'positive', text: posText });
+    }
+    if (negText && negText.length >= 2 && !isSheetError(negText)) {
+      insights.push({ type: 'negative', text: negText });
+    }
+  }
+
+  return insights;
 }

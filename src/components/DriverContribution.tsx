@@ -45,23 +45,24 @@ export function DriverContribution({ drivers, variance, viewType = 'monthly' }: 
   const residualShare = absVar > 0 ? absResidual / absVar : 0;
 
   return (
-    <div className="sales-chart-card">
-      <div className="sales-chart-header">
-        <div className="sales-chart-title">Driver Contribution (Ranked)</div>
-        <div className="sales-chart-sub">
+    <div className="sales-chart-card sales-driver-card" style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+      <div className="sales-chart-header" style={{ padding: '16px 20px', borderBottom: '1px solid rgba(30, 27, 75, 0.1)', flexShrink: 0 }}>
+        <div className="sales-chart-title" style={{ fontSize: '16px', fontWeight: '600', color: '#334155', marginBottom: '4px', fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif' }}>
+          Driver Contribution (Ranked)
+        </div>
+        <div className="sales-chart-sub" style={{ fontSize: '12px', color: 'rgba(51, 65, 85, 0.75)', fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif' }}>
           Contribution to variance in reporting currency
           {viewType !== 'monthly' && ` • ${viewType.replace('-', ' ')} view`}
         </div>
       </div>
-      <div className="sales-chart-body">
-        <div style={{ overflowX: 'auto' }}>
-          <table className="sales-modal-table sales-driver-table" style={{ width: '100%' }}>
+      <div className="sales-chart-body" style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '16px 20px' }}>
+        <div style={{ overflowX: 'auto', overflowY: 'visible', minWidth: 0 }}>
+          <table className="sales-modal-table sales-driver-table" style={{ width: '100%', minWidth: '260px', tableLayout: 'fixed' }}>
             <thead>
               <tr>
-                <th style={{ width: '34%' }}>Driver</th>
-                <th style={{ width: '18%', textAlign: 'right' }}>Contribution</th>
-                <th style={{ width: '16%', textAlign: 'right' }}>Share (abs)</th>
-                <th>Explanation</th>
+                <th style={{ width: '1%', minWidth: 80 }}>Driver</th>
+                <th style={{ width: '100px', textAlign: 'right', whiteSpace: 'nowrap' }}>Contribution</th>
+                <th style={{ width: '72px', textAlign: 'right', whiteSpace: 'nowrap' }}>Share (abs)</th>
               </tr>
             </thead>
             <tbody key={ranked.map((d) => `${d.name}:${d.value}`).join('|')}>
@@ -92,13 +93,12 @@ export function DriverContribution({ drivers, variance, viewType = 'monthly' }: 
                         {hasDetails && <span style={{ fontSize: '10px', opacity: 0.6 }}>👆</span>}
                       </span>
                     </td>
-                    <td className={`num ${cls}`} style={{ textAlign: 'right', fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif', color: cls === 'pos' ? '#0d9488' : '#dc2626' }}>
+                    <td className={`num ${cls}`} style={{ textAlign: 'right', fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif', color: cls === 'pos' ? '#0d9488' : '#dc2626', whiteSpace: 'nowrap' }}>
                       {formatMoney(d.value)}
                     </td>
-                    <td className="num" style={{ textAlign: 'right', fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif' }}>
+                    <td className="num" style={{ textAlign: 'right', fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif', whiteSpace: 'nowrap' }}>
                       {(share * 100).toFixed(1)}%
                     </td>
-                    <td style={{ color: 'var(--sales-text-secondary)' }}>{d.note}</td>
                   </tr>
                 );
               })}

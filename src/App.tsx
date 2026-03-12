@@ -90,7 +90,8 @@ function App() {
         onMonthChange={setSelectedMonth}
       />
       <main className="sales-main">
-        <div className="sales-page-header">
+        <div className="sales-main-scroll" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflowY: 'auto', overflowX: 'hidden' }}>
+        <div className="sales-page-header" style={{ flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '20px', flexWrap: 'wrap', marginBottom: '20px' }}>
             <div style={{ flex: '1', minWidth: '0' }}>
               <h1 className="sales-page-title">
@@ -258,7 +259,7 @@ function App() {
           </div>
         </div>
 
-        <div style={{ marginBottom: '28px' }}>
+        <div style={{ marginBottom: '20px', flexShrink: 0 }}>
           <PerformanceCards
             planRec={revenueData.planRec}
             actual={revenueData.actual}
@@ -267,20 +268,22 @@ function App() {
           />
         </div>
 
-        <div style={{ marginBottom: '20px' }}>
-          <VarianceBridge
-            steps={revenueData.bridgeSteps}
-            viewType={viewType}
-            clientType={activeTab as ClientType}
-            selectedMonth={selectedMonth}
-          />
+        <div className="sales-waterfall-driver-row" style={{ marginBottom: '20px', display: 'grid', gridTemplateColumns: 'minmax(0, 3fr) minmax(0, 1fr)', gap: '24px', alignItems: 'stretch', minHeight: '380px', flexShrink: 0 }}>
+          <div style={{ minWidth: 0, display: 'flex', overflow: 'hidden' }}>
+            <VarianceBridge
+              key={activeTab}
+              steps={revenueData.bridgeSteps}
+              viewType={viewType}
+              clientType={activeTab as ClientType}
+              selectedMonth={selectedMonth}
+            />
+          </div>
+          <div style={{ minWidth: 0, display: 'flex', overflow: 'hidden' }}>
+            <DriverContribution drivers={revenueData.drivers} variance={revenueData.variance} viewType={viewType} />
+          </div>
         </div>
 
-        <div style={{ marginBottom: '20px' }}>
-          <DriverContribution drivers={revenueData.drivers} variance={revenueData.variance} viewType={viewType} />
-        </div>
-
-        <div style={{ marginBottom: '20px' }}>
+        <div style={{ marginBottom: '20px', flexShrink: 0 }}>
           <SummaryInsights insights={revenueData.insights} viewType={viewType} />
         </div>
 
@@ -291,6 +294,7 @@ function App() {
           clientType={activeTab as ClientType}
           selectedMonth={selectedMonth}
         />
+        </div>
       </main>
     </div>
   );
