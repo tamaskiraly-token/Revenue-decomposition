@@ -1,3 +1,4 @@
+import { useState, useMemo } from 'react';
 
 export interface ClientDetail {
   clientName: string;
@@ -16,6 +17,12 @@ export interface ClientDetail {
   churnReason?: string;
   fxRate?: number;
   fxChange?: number;
+  /** FX breakdown: plan FX rate from sheet (FX (Plan) column) */
+  planFxRate?: number;
+  /** Fixed fee breakdown */
+  currency?: string;
+  revenueComponent?: string;
+  comment?: string;
 }
 
 interface DriverDetailModalProps {
@@ -52,25 +59,52 @@ export function DriverDetailModal({ driverName, driverValue, clientDetails, onCl
   };
 
   // Determine what type of data to show based on driver name
+  const isFixedFee = driverName.toLowerCase().includes('fixed fee');
   const isVolume = driverName.toLowerCase().includes('volume');
   const isPrice = driverName.toLowerCase().includes('price');
   const isTiming = driverName.toLowerCase().includes('timing');
   const isChurn = driverName.toLowerCase().includes('churn');
   const isFX = driverName.toLowerCase().includes('fx');
 
-  // Filter out invalid details and sort by absolute variance
-  const validDetails = clientDetails.filter(d => d && d.clientName && isFinite(d.variance));
-  
-  if (validDetails.length === 0) {
+  const [totalSortOrder, setTotalSortOrder] = useState<'asc' | 'desc'>('desc');
+
+  // Revenue Impact for sorting: use signed value (Volume/Price: negative when delta is negative)
+  const getSortVariance = (d: ClientDetail) => {
+    const raw = d.variance ?? 0;
+    if (isVolume) {
+      const delta = (d.actualVolume ?? d.actualValue ?? 0) - (d.planVolume ?? d.planValue ?? 0);
+      return raw > 0 && delta < 0 ? -raw : raw;
+    }
+    if (isPrice) {
+      const delta = (d.actualPrice ?? d.actualValue ?? 0) - (d.planPrice ?? d.planValue ?? 0);
+      return raw > 0 && delta < 0 ? -raw : raw;
+    }
+    return raw;
+  };
+
+  // Filter: invalid rows; for Fixed fee only show rows where TOTAL !== 0
+  const sortedDetails = useMemo(() => {
+    const list = clientDetails.filter(d => {
+      if (!d || !d.clientName || !isFinite(d.variance)) return false;
+      if (isFixedFee && d.variance === 0) return false;
+      return true;
+    });
+    return [...list].sort((a, b) => {
+      const va = getSortVariance(a);
+      const vb = getSortVariance(b);
+      return totalSortOrder === 'desc' ? vb - va : va - vb;
+    });
+  }, [clientDetails, isFixedFee, totalSortOrder]);
+
+  if (sortedDetails.length === 0) {
     return null;
   }
-  
-  const sortedDetails = [...validDetails].sort((a, b) => Math.abs(b.variance || 0) - Math.abs(a.variance || 0));
-  const totalVariance = validDetails.reduce((sum, d) => sum + (d.variance || 0), 0);
+
+  const totalVariance = sortedDetails.reduce((sum, d) => sum + (d.variance || 0), 0);
 
   return (
     <div className="sales-modal-backdrop" onClick={onClose}>
-      <div className="sales-modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '800px', maxHeight: '85vh' }}>
+      <div className="sales-modal sales-modal--large" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 'min(95vw, 1200px)', maxHeight: '90vh', width: 'min(95vw, 1200px)' }}>
         <div className="sales-modal-header">
           <div>
             <div className="sales-modal-title">{driverName} - Detailed Breakdown</div>
@@ -82,18 +116,38 @@ export function DriverDetailModal({ driverName, driverValue, clientDetails, onCl
             ✕
           </button>
         </div>
+        <div style={{ padding: '8px 24px', borderBottom: '1px solid var(--sales-border)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <span style={{ fontSize: '12px', color: 'var(--sales-text-secondary)' }}>Sort by TOTAL:</span>
+          <button
+            type="button"
+            onClick={() => setTotalSortOrder(prev => prev === 'desc' ? 'asc' : 'desc')}
+            style={{
+              padding: '6px 12px',
+              fontSize: '12px',
+              border: '1px solid var(--sales-border)',
+              borderRadius: 'var(--sales-radius-sm)',
+              background: 'var(--sales-surface)',
+              color: 'var(--sales-accent)',
+              fontWeight: '600',
+              cursor: 'pointer',
+            }}
+          >
+            {totalSortOrder === 'desc' ? 'Descending ↓' : 'Ascending ↑'}
+          </button>
+        </div>
         <div className="sales-modal-body">
-          <div style={{ marginBottom: '16px', fontSize: '13px', color: 'var(--sales-text-secondary)', lineHeight: '1.5' }}>
+          <div style={{ marginBottom: '16px', fontSize: '12px', color: 'var(--sales-text-secondary)', lineHeight: '1.5' }}>
             {isVolume && 'This breakdown shows transaction volume differences per client. Higher volume increases revenue, lower volume decreases it.'}
             {isPrice && 'This breakdown shows price point differences per client. Price increases boost revenue, decreases reduce it.'}
             {isTiming && 'This breakdown shows implementation timing differences. Delays push revenue recognition later, accelerations bring it forward.'}
             {isChurn && 'This breakdown shows which clients churned or downgraded, causing revenue loss.'}
             {isFX && 'This breakdown shows FX rate impact per client. FX rate changes affect revenue when converting from local to reporting currency.'}
-            {!isVolume && !isPrice && !isTiming && !isChurn && !isFX && `This breakdown shows how ${driverName.toLowerCase()} variance is distributed across clients.`}
-            {' Values are sorted by absolute contribution.'}
+            {isFixedFee && 'This breakdown shows the difference between plan and actual fixed fee component of revenue by client.'}
+            {!isVolume && !isPrice && !isTiming && !isChurn && !isFX && !isFixedFee && `This breakdown shows how ${driverName.toLowerCase()} variance is distributed across clients.`}
+            {isFixedFee ? ' Only rows with non-zero TOTAL are shown.' : ' Use the button above to sort by TOTAL (Revenue Impact).'}
           </div>
-          <div style={{ overflowX: 'auto' }}>
-            <table className="sales-modal-table" style={{ width: '100%' }}>
+          <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(90vh - 220px)' }}>
+            <table className="sales-modal-table sales-modal-table--compact" style={{ width: '100%' }}>
               <thead>
                 <tr>
                   <th style={{ width: '25%' }}>Client</th>
@@ -140,7 +194,17 @@ export function DriverDetailModal({ driverName, driverValue, clientDetails, onCl
                       <th style={{ width: '12%', textAlign: 'right' }}>Revenue Impact</th>
                     </>
                   )}
-                  {!isVolume && !isPrice && !isTiming && !isChurn && !isFX && (
+                  {isFixedFee && (
+                    <>
+                      <th style={{ width: '12%', textAlign: 'left' }}>Currency</th>
+                      <th style={{ width: '12%', textAlign: 'left' }}>Revenue component</th>
+                      <th style={{ width: '14%', textAlign: 'right' }}>Amount (Plan)</th>
+                      <th style={{ width: '14%', textAlign: 'right' }}>Amount (Act)</th>
+                      <th style={{ width: '14%', textAlign: 'right' }}>TOTAL</th>
+                      <th style={{ width: '20%', textAlign: 'left' }}>Comment</th>
+                    </>
+                  )}
+                  {!isFixedFee && !isVolume && !isPrice && !isTiming && !isChurn && !isFX && (
                     <>
                       <th style={{ width: '20%', textAlign: 'right' }}>Plan</th>
                       <th style={{ width: '20%', textAlign: 'right' }}>Actual</th>
@@ -153,97 +217,106 @@ export function DriverDetailModal({ driverName, driverValue, clientDetails, onCl
               <tbody>
                 {sortedDetails.map((detail, idx) => {
                   if (!detail) return null;
-                  const cls = (detail.variance || 0) >= 0 ? 'pos' : 'neg';
+                  // Volume/Price: derive sign from actual delta so color and Revenue Impact match (sheet may give positive variance when impact is negative)
+                  const volumeDelta = isVolume
+                    ? (detail.actualVolume ?? detail.actualValue ?? 0) - (detail.planVolume ?? detail.planValue ?? 0)
+                    : 0;
+                  const priceDelta = isPrice
+                    ? (detail.actualPrice ?? detail.actualValue ?? 0) - (detail.planPrice ?? detail.planValue ?? 0)
+                    : 0;
+                  const rawVariance = detail.variance ?? 0;
+                  const impactSignFromDelta = isVolume ? (volumeDelta < 0 ? -1 : 1) : isPrice ? (priceDelta < 0 ? -1 : 1) : null;
+                  const displayVariance = impactSignFromDelta != null && rawVariance > 0 && impactSignFromDelta < 0
+                    ? -rawVariance
+                    : rawVariance;
+                  const cls = (impactSignFromDelta != null ? impactSignFromDelta > 0 : rawVariance >= 0) ? 'pos' : 'neg';
                   return (
                     <tr key={idx}>
-                      <td style={{ fontWeight: '600', color: 'var(--sales-text)' }}>{detail.clientName || 'Unknown'}</td>
-                      {isVolume && detail.planVolume !== undefined && detail.actualVolume !== undefined && (
+                      <td className="sales-modal-cell-client" style={{ fontWeight: '600', color: 'var(--sales-text)' }}>{detail.clientName || 'Unknown'}</td>
+                      {isVolume && (
                         <>
                           <td className="num" style={{ textAlign: 'right', fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif' }}>
-                            {detail.planVolume.toLocaleString()}
+                            {(detail.planVolume ?? detail.planValue ?? 0).toLocaleString()}
                           </td>
                           <td className="num" style={{ textAlign: 'right', fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif' }}>
-                            {detail.actualVolume.toLocaleString()}
+                            {(detail.actualVolume ?? detail.actualValue ?? 0).toLocaleString()}
                           </td>
-                          <td className={`num ${cls}`} style={{ 
-                            textAlign: 'right', 
+                          <td className={`num ${cls}`} style={{
+                            textAlign: 'right',
                             fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif',
                             fontWeight: '700',
                             color: cls === 'pos' ? '#0d9488' : '#dc2626'
                           }}>
-                            {(() => {
-                              const volumeDelta = (detail.actualVolume || 0) - (detail.planVolume || 0);
-                              return (volumeDelta > 0 ? '+' : '') + volumeDelta.toLocaleString();
-                            })()}
+                            {(volumeDelta > 0 ? '+' : '') + volumeDelta.toLocaleString()}
                           </td>
-                          <td className={`num ${cls}`} style={{ 
-                            textAlign: 'right', 
+                          <td className={`num ${cls}`} style={{
+                            textAlign: 'right',
                             fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif',
                             color: cls === 'pos' ? '#0d9488' : '#dc2626'
                           }}>
-                            {formatPct(detail.variancePct || 0)}
+                            {formatPct(detail.variancePct != null && impactSignFromDelta === -1 ? -Math.abs(detail.variancePct) : (detail.variancePct || 0))}
                           </td>
-                          <td className={`num ${cls}`} style={{ 
-                            textAlign: 'right', 
+                          <td className={`num ${cls}`} style={{
+                            textAlign: 'right',
                             fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif',
                             fontWeight: '700',
                             color: cls === 'pos' ? '#0d9488' : '#dc2626'
                           }}>
-                            {formatMoney(detail.variance || 0)}
+                            {formatMoney(displayVariance)}
                           </td>
                         </>
                       )}
-                      {isPrice && detail.planPrice !== undefined && detail.actualPrice !== undefined && (
+                      {isPrice && (
                         <>
                           <td className="num" style={{ textAlign: 'right', fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif' }}>
-                            {formatPrice(detail.planPrice)}
+                            {formatPrice(detail.planPrice ?? detail.planValue ?? 0)}
                           </td>
                           <td className="num" style={{ textAlign: 'right', fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif' }}>
-                            {formatPrice(detail.actualPrice)}
+                            {formatPrice(detail.actualPrice ?? detail.actualValue ?? 0)}
                           </td>
-                          <td className={`num ${cls}`} style={{ 
-                            textAlign: 'right', 
+                          <td className={`num ${cls}`} style={{
+                            textAlign: 'right',
                             fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif',
                             fontWeight: '700',
                             color: cls === 'pos' ? '#0d9488' : '#dc2626'
                           }}>
-                            {(detail.variance || 0) > 0 ? '+' : ''}{formatPrice(detail.variance || 0)}
+                            {(displayVariance > 0 ? '+' : '')}{formatPrice(displayVariance)}
                           </td>
-                          <td className={`num ${cls}`} style={{ 
-                            textAlign: 'right', 
+                          <td className={`num ${cls}`} style={{
+                            textAlign: 'right',
                             fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif',
                             color: cls === 'pos' ? '#0d9488' : '#dc2626'
                           }}>
-                            {formatPct(detail.variancePct || 0)}
+                            {formatPct(detail.variancePct != null && impactSignFromDelta === -1 ? -Math.abs(detail.variancePct) : (detail.variancePct || 0))}
                           </td>
-                          <td className={`num ${cls}`} style={{ 
-                            textAlign: 'right', 
+                          <td className={`num ${cls}`} style={{
+                            textAlign: 'right',
                             fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif',
                             fontWeight: '700',
                             color: cls === 'pos' ? '#0d9488' : '#dc2626'
                           }}>
-                            {formatMoney(detail.variance || 0)}
+                            {formatMoney(displayVariance)}
                           </td>
                         </>
                       )}
-                      {isTiming && detail.planDate && detail.actualDate && (
+                      {isTiming && (
                         <>
                           <td style={{ textAlign: 'center', fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif' }}>
-                            {detail.planDate}
+                            {detail.planDate ?? '—'}
                           </td>
                           <td style={{ textAlign: 'center', fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif' }}>
-                            {detail.actualDate}
+                            {detail.actualDate ?? '—'}
                           </td>
-                          <td className={`num ${detail.daysDelay && detail.daysDelay > 0 ? 'neg' : 'pos'}`} style={{ 
+                          <td className={`num ${detail.daysDelay != null && detail.daysDelay > 0 ? 'neg' : 'pos'}`} style={{ 
                             textAlign: 'right', 
                             fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif',
                             fontWeight: '700',
                             color: detail.daysDelay && detail.daysDelay > 0 ? '#dc2626' : '#0d9488'
                           }}>
-                            {detail.daysDelay && detail.daysDelay > 0 ? '+' : ''}{detail.daysDelay || 0} days
+                            {(detail.daysDelay != null && detail.daysDelay > 0 ? '+' : '')}{(detail.daysDelay ?? 0)} days
                           </td>
                           <td style={{ textAlign: 'right', fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif', color: 'var(--sales-text-secondary)' }}>
-                            {detail.daysDelay && detail.daysDelay > 0 ? 'Delayed' : detail.daysDelay && detail.daysDelay < 0 ? 'Accelerated' : 'On time'}
+                            {detail.daysDelay != null && detail.daysDelay > 0 ? 'Delayed' : detail.daysDelay != null && detail.daysDelay < 0 ? 'Accelerated' : 'On time'}
                           </td>
                           <td className={`num ${cls}`} style={{ 
                             textAlign: 'right', 
@@ -255,10 +328,10 @@ export function DriverDetailModal({ driverName, driverValue, clientDetails, onCl
                           </td>
                         </>
                       )}
-                      {isChurn && detail.churnReason && (
+                      {isChurn && (
                         <>
                           <td style={{ color: 'var(--sales-text-secondary)', fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif' }}>
-                            {detail.churnReason}
+                            {detail.churnReason ?? '—'}
                           </td>
                           <td className={`num ${cls}`} style={{ 
                             textAlign: 'right', 
@@ -277,24 +350,24 @@ export function DriverDetailModal({ driverName, driverValue, clientDetails, onCl
                           </td>
                         </>
                       )}
-                      {isFX && detail.fxRate !== undefined && detail.fxChange !== undefined && (
+                      {isFX && (
                         <>
                           <td className="num" style={{ textAlign: 'right', fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif' }}>
-                            {planFX.toFixed(4)}
+                            {(detail.planFxRate != null ? detail.planFxRate : planFX).toFixed(4)}
                           </td>
                           <td className="num" style={{ textAlign: 'right', fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif' }}>
-                            {detail.fxRate.toFixed(4)}
+                            {detail.fxRate != null ? detail.fxRate.toFixed(4) : '—'}
                           </td>
-                          <td className={`num ${(detail.fxChange || 0) >= 0 ? 'pos' : 'neg'}`} style={{ 
-                            textAlign: 'right', 
+                          <td className={`num ${(detail.fxChange ?? 0) >= 0 ? 'pos' : 'neg'}`} style={{
+                            textAlign: 'right',
                             fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif',
                             fontWeight: '700',
-                            color: (detail.fxChange || 0) >= 0 ? '#0d9488' : '#dc2626'
+                            color: (detail.fxChange ?? 0) >= 0 ? '#0d9488' : '#dc2626'
                           }}>
-                            {(detail.fxChange || 0) > 0 ? '+' : ''}{(detail.fxChange || 0).toFixed(4)}
+                            {detail.fxChange != null ? ((detail.fxChange > 0 ? '+' : '') + detail.fxChange.toFixed(4)) : '—'}
                           </td>
                           <td style={{ textAlign: 'right', fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif', color: 'var(--sales-text-secondary)' }}>
-                            {(detail.fxChange || 0) >= 0 ? 'Appreciation' : 'Depreciation'}
+                            {detail.fxChange != null ? ((detail.fxChange >= 0 ? 'Appreciation' : 'Depreciation')) : '—'}
                           </td>
                           <td className={`num ${cls}`} style={{ 
                             textAlign: 'right', 
@@ -306,7 +379,28 @@ export function DriverDetailModal({ driverName, driverValue, clientDetails, onCl
                           </td>
                         </>
                       )}
-                      {!isVolume && !isPrice && !isTiming && !isChurn && !isFX && (
+                      {isFixedFee && (
+                        <>
+                          <td style={{ fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif' }}>{detail.currency ?? '—'}</td>
+                          <td style={{ fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif' }}>{detail.revenueComponent ?? '—'}</td>
+                          <td className="num" style={{ textAlign: 'right', fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif' }}>
+                            {formatMoney(detail.planValue ?? 0)}
+                          </td>
+                          <td className="num" style={{ textAlign: 'right', fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif' }}>
+                            {formatMoney(detail.actualValue ?? 0)}
+                          </td>
+                          <td className={`num ${cls}`} style={{ 
+                            textAlign: 'right', 
+                            fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif',
+                            fontWeight: '700',
+                            color: cls === 'pos' ? '#0d9488' : '#dc2626'
+                          }}>
+                            {formatMoney(detail.variance ?? 0)}
+                          </td>
+                          <td style={{ fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif', color: 'var(--sales-text-secondary)' }}>{detail.comment ?? '—'}</td>
+                        </>
+                      )}
+                      {!isFixedFee && !isVolume && !isPrice && !isTiming && !isChurn && !isFX && (
                         <>
                           <td className="num" style={{ textAlign: 'right', fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif' }}>
                             {formatMoney(detail.planValue || 0)}
@@ -338,27 +432,42 @@ export function DriverDetailModal({ driverName, driverValue, clientDetails, onCl
               <tfoot>
                 <tr style={{ borderTop: '2px solid var(--sales-border)', fontWeight: '700' }}>
                   <td style={{ fontWeight: '700', color: 'var(--sales-text)' }}>Total</td>
+                  {isFixedFee && (
+                    <>
+                      <td colSpan={2}></td>
+                      <td className="num" style={{ textAlign: 'right', fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif' }}>
+                        {formatMoney(sortedDetails.reduce((sum, d) => sum + (d.planValue ?? 0), 0))}
+                      </td>
+                      <td className="num" style={{ textAlign: 'right', fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif' }}>
+                        {formatMoney(sortedDetails.reduce((sum, d) => sum + (d.actualValue ?? 0), 0))}
+                      </td>
+                      <td className={`num ${totalVariance >= 0 ? 'pos' : 'neg'}`} style={{ textAlign: 'right', fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif', fontWeight: '700', color: totalVariance >= 0 ? '#0d9488' : '#dc2626' }}>
+                        {formatMoney(totalVariance)}
+                      </td>
+                      <td></td>
+                    </>
+                  )}
                   {isVolume && (
                     <>
                       <td className="num" style={{ textAlign: 'right', fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif' }}>
-                        {validDetails.reduce((sum, d) => sum + (d.planVolume || 0), 0).toLocaleString()}
+                        {sortedDetails.reduce((sum, d) => sum + (d.planVolume || 0), 0).toLocaleString()}
                       </td>
                       <td className="num" style={{ textAlign: 'right', fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif' }}>
-                        {validDetails.reduce((sum, d) => sum + (d.actualVolume || 0), 0).toLocaleString()}
+                        {sortedDetails.reduce((sum, d) => sum + (d.actualVolume || 0), 0).toLocaleString()}
                       </td>
                       <td className={`num ${(() => {
-                        const totalVolumeDelta = validDetails.reduce((sum, d) => sum + ((d.actualVolume || 0) - (d.planVolume || 0)), 0);
+                        const totalVolumeDelta = sortedDetails.reduce((sum, d) => sum + ((d.actualVolume || 0) - (d.planVolume || 0)), 0);
                         return totalVolumeDelta >= 0 ? 'pos' : 'neg';
                       })()}`} style={{ 
                         textAlign: 'right', 
                         fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif',
                         color: (() => {
-                          const totalVolumeDelta = validDetails.reduce((sum, d) => sum + ((d.actualVolume || 0) - (d.planVolume || 0)), 0);
+                          const totalVolumeDelta = sortedDetails.reduce((sum, d) => sum + ((d.actualVolume || 0) - (d.planVolume || 0)), 0);
                           return totalVolumeDelta >= 0 ? '#0d9488' : '#dc2626';
                         })()
                       }}>
                         {(() => {
-                          const totalVolumeDelta = validDetails.reduce((sum, d) => sum + ((d.actualVolume || 0) - (d.planVolume || 0)), 0);
+                          const totalVolumeDelta = sortedDetails.reduce((sum, d) => sum + ((d.actualVolume || 0) - (d.planVolume || 0)), 0);
                           return (totalVolumeDelta > 0 ? '+' : '') + totalVolumeDelta.toLocaleString();
                         })()}
                       </td>
@@ -367,11 +476,11 @@ export function DriverDetailModal({ driverName, driverValue, clientDetails, onCl
                         fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif',
                         color: totalVariance >= 0 ? '#0d9488' : '#dc2626'
                       }}>
-                        {formatPct(validDetails.reduce((sum, d) => {
+                        {formatPct(sortedDetails.reduce((sum, d) => {
                           const volumeDelta = (d.actualVolume || 0) - (d.planVolume || 0);
                           const planVol = d.planVolume || 1;
                           return sum + (planVol !== 0 ? volumeDelta / planVol : 0);
-                        }, 0) / validDetails.length * 100)}
+                        }, 0) / (sortedDetails.length || 1) * 100)}
                       </td>
                       <td className={`num ${totalVariance >= 0 ? 'pos' : 'neg'}`} style={{ 
                         textAlign: 'right', 
@@ -433,13 +542,13 @@ export function DriverDetailModal({ driverName, driverValue, clientDetails, onCl
                       </td>
                     </>
                   )}
-                  {!isVolume && !isPrice && !isTiming && !isChurn && !isFX && (
+                  {!isFixedFee && !isVolume && !isPrice && !isTiming && !isChurn && !isFX && (
                     <>
                       <td className="num" style={{ textAlign: 'right', fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif' }}>
-                        {formatMoney(validDetails.reduce((sum, d) => sum + (d.planValue || 0), 0))}
+                        {formatMoney(sortedDetails.reduce((sum, d) => sum + (d.planValue || 0), 0))}
                       </td>
                       <td className="num" style={{ textAlign: 'right', fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif' }}>
-                        {formatMoney(validDetails.reduce((sum, d) => sum + (d.actualValue || 0), 0))}
+                        {formatMoney(sortedDetails.reduce((sum, d) => sum + (d.actualValue || 0), 0))}
                       </td>
                       <td className={`num ${totalVariance >= 0 ? 'pos' : 'neg'}`} style={{ 
                         textAlign: 'right', 
@@ -453,7 +562,7 @@ export function DriverDetailModal({ driverName, driverValue, clientDetails, onCl
                         fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif',
                         color: totalVariance >= 0 ? '#0d9488' : '#dc2626'
                       }}>
-                        {formatPct(totalVariance / (validDetails.reduce((sum, d) => sum + (d.planValue || 0), 0) || 1))}
+                        {formatPct(totalVariance / (sortedDetails.reduce((sum, d) => sum + (d.planValue || 0), 0) || 1))}
                       </td>
                     </>
                   )}

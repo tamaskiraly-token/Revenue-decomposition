@@ -17,6 +17,12 @@ export interface ClientDetail {
   churnReason?: string;
   fxRate?: number;
   fxChange?: number;
+  /** FX breakdown: plan FX rate from sheet (FX (Plan) column) */
+  planFxRate?: number;
+  /** Fixed fee breakdown */
+  currency?: string;
+  revenueComponent?: string;
+  comment?: string;
 }
 
 export interface Insight {
@@ -110,25 +116,28 @@ function generateSingleMonthData(month: string, clientType: 'existing-clients' |
   const actualFX = planFX * (0.94 + rand() * 0.12);
 
   // Drivers (decompose variance) - different distributions for existing vs new clients
+  // Fixed fee difference: plan vs actual fixed fee component
+  const fixedFee = variance * (0.08 + rand() * 0.08); // 8-16% of variance
+  const remainder = variance - fixedFee;
   let vol: number, price: number, timing: number, churn: number, fx: number;
-  
+
   if (clientType === 'existing-clients') {
     // Existing clients: larger driver impacts for more visible differences
-    vol = variance * (0.25 + rand() * 0.20); // 25-45% of variance
-    price = variance * (0.20 + rand() * 0.18); // 20-38% of variance
-    timing = variance * (0.15 + rand() * 0.15); // 15-30% of variance
-    churn = variance * (-0.30 + rand() * 0.20); // More churn impact: -10% to -30%
-    fx = variance * (0.10 + rand() * 0.10); // 10-20% of variance
+    vol = remainder * (0.25 + rand() * 0.20); // 25-45% of remainder
+    price = remainder * (0.20 + rand() * 0.18); // 20-38%
+    timing = remainder * (0.15 + rand() * 0.15); // 15-30%
+    churn = remainder * (-0.30 + rand() * 0.20); // More churn impact
+    fx = remainder * (0.10 + rand() * 0.10); // 10-20%
   } else {
     // New clients: volume is more significant, less churn (they're new!)
-    vol = variance * (0.35 + rand() * 0.20);
-    price = variance * (0.22 + rand() * 0.18);
-    timing = variance * (0.15 + rand() * 0.15);
-    churn = variance * (-0.05 + rand() * 0.05); // Minimal churn: -5% to 0%
-    fx = variance * (0.08 + rand() * 0.08);
+    vol = remainder * (0.35 + rand() * 0.20);
+    price = remainder * (0.22 + rand() * 0.18);
+    timing = remainder * (0.15 + rand() * 0.15);
+    churn = remainder * (-0.05 + rand() * 0.05); // Minimal churn
+    fx = remainder * (0.08 + rand() * 0.08);
   }
-  
-  const other = variance - (vol + price + timing + churn + fx);
+
+  const other = variance - (fixedFee + vol + price + timing + churn + fx);
 
   // Generate client names based on type
   const clientNames = clientType === 'existing-clients' 
@@ -261,9 +270,15 @@ function generateSingleMonthData(month: string, clientType: 'existing-clients' |
   };
 
   const drivers = [
-    { 
-      name: 'Volume (transactions)', 
-      value: vol, 
+    {
+      name: 'Fixed fee difference',
+      value: fixedFee,
+      note: 'Difference between plan and actual fixed fee component of revenue',
+      clientDetails: generateClientDetails(fixedFee, 'Fixed fee difference', planFX),
+    },
+    {
+      name: 'Volume (transactions)',
+      value: vol,
       note: clientType === 'existing-clients' ? 'Δ transaction count vs plan @ plan price (existing customer activity)' : 'Δ transaction count vs plan @ plan price (new customer onboarding)',
       clientDetails: generateClientDetails(vol, 'Volume (transactions)', planFX),
     },
@@ -291,23 +306,24 @@ function generateSingleMonthData(month: string, clientType: 'existing-clients' |
       note: 'Plan FX vs actual FX on actual recognized local',
       clientDetails: generateClientDetails(fx, 'FX (translation)', planFX),
     },
-    { 
-      name: 'Other / residual', 
-      value: other, 
+    {
+      name: 'Residual',
+      value: other,
       note: 'Rounding + unmodeled effects (should be small)',
-      clientDetails: generateClientDetails(other, 'Other / residual', planFX),
+      clientDetails: generateClientDetails(other, 'Residual', planFX),
     },
   ];
 
   // Map driver details to bridge steps
   const driverMap: Record<string, ClientDetail[] | undefined> = {};
   drivers.forEach(driver => {
-    const stepLabel = driver.name.includes('Volume') ? 'Volume' :
+    const stepLabel = driver.name.includes('Fixed fee') ? 'Fixed fee difference' :
+                     driver.name.includes('Volume') ? 'Volume' :
                      driver.name.includes('Price') ? 'Price' :
                      driver.name.includes('Timing') ? 'Timing' :
                      driver.name.includes('churn') ? 'Unknown churn' :
                      driver.name.includes('FX') ? 'FX' :
-                     driver.name.includes('Other') ? 'Other' : '';
+                     driver.name.includes('Residual') ? 'Residual' : '';
     if (stepLabel) {
       driverMap[stepLabel] = driver.clientDetails;
     }
@@ -315,12 +331,13 @@ function generateSingleMonthData(month: string, clientType: 'existing-clients' |
 
   const bridgeSteps = [
     { label: 'Plan', value: planRec, kind: 'total' as const, planFX },
+    { label: 'Fixed fee difference', value: fixedFee, kind: 'delta' as const, clientDetails: driverMap['Fixed fee difference'] },
     { label: 'Volume', value: vol, kind: 'delta' as const, clientDetails: driverMap['Volume'] },
     { label: 'Price', value: price, kind: 'delta' as const, clientDetails: driverMap['Price'] },
     { label: 'Timing', value: timing, kind: 'delta' as const, clientDetails: driverMap['Timing'] },
     { label: 'Unknown churn', value: churn, kind: 'delta' as const, clientDetails: driverMap['Unknown churn'] },
     { label: 'FX', value: fx, kind: 'delta' as const, clientDetails: driverMap['FX'], planFX },
-    { label: 'Other', value: other, kind: 'delta' as const, clientDetails: driverMap['Other'] },
+    { label: 'Residual', value: other, kind: 'delta' as const, clientDetails: driverMap['Residual'] },
     { label: 'Actual', value: actual, kind: 'total' as const },
   ];
 
@@ -536,13 +553,14 @@ function aggregateMonths(months: RevenueData[]): RevenueData {
   aggregated.drivers = Object.values(driverMap);
 
   // Aggregate bridge steps
-  const otherDriver = aggregated.drivers.find(d => d.name.includes('Other'));
+  const residualDriver = aggregated.drivers.find(d => d.name.includes('Residual'));
   aggregated.bridgeSteps = [
     { label: 'Plan', value: aggregated.planRec, kind: 'total' as const, planFX: aggregated.planFX },
     ...aggregated.drivers
-      .filter(d => !d.name.includes('Other'))
+      .filter(d => !d.name.includes('Residual'))
       .map(d => {
-        const stepLabel = d.name.includes('Volume') ? 'Volume' :
+        const stepLabel = d.name.includes('Fixed fee') ? 'Fixed fee difference' :
+                         d.name.includes('Volume') ? 'Volume' :
                          d.name.includes('Price') ? 'Price' :
                          d.name.includes('Timing') ? 'Timing' :
                          d.name.includes('churn') ? 'Unknown churn' :
@@ -556,11 +574,11 @@ function aggregateMonths(months: RevenueData[]): RevenueData {
         };
       })
       .filter(s => s.label !== ''),
-    { 
-      label: 'Other', 
-      value: otherDriver?.value || 0, 
+    {
+      label: 'Residual',
+      value: residualDriver?.value || 0,
       kind: 'delta' as const,
-      clientDetails: otherDriver?.clientDetails,
+      clientDetails: residualDriver?.clientDetails,
     },
     { label: 'Actual', value: aggregated.actual, kind: 'total' as const },
   ];

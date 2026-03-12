@@ -1,5 +1,15 @@
-import { useEffect, useRef, useMemo, useState } from 'react';
+import { useMemo, useState, useRef } from 'react';
 import { DriverDetailModal, type ClientDetail } from './DriverDetailModal';
+import { fetchSheetCsv, parseBreakdownCsv, parseFixedFeeBreakdownCsv } from '../data/googleSheets';
+import { BREAKDOWN_GIDS, STEP_LABEL_TO_BREAKDOWN_KEY } from '../config/sheets';
+import type { ClientType } from '../config/sheets';
+
+function getBreakdownGid(clientType: ClientType | undefined, stepLabel: string): number | undefined {
+  if (!clientType) return undefined;
+  const gids = BREAKDOWN_GIDS[clientType] as Record<string, number>;
+  const key = STEP_LABEL_TO_BREAKDOWN_KEY[stepLabel] ?? stepLabel;
+  return gids[key];
+}
 
 export interface BridgeStep {
   label: string;
@@ -11,217 +21,238 @@ export interface BridgeStep {
 
 export type ViewType = 'monthly' | 'quarterly-cumulative' | 'annual-cumulative';
 
+const W = 1200;
+const H = 600;
+const padL = 80;
+const padR = 40;
+const padT = 50;
+const padB = 80;
+const innerW = W - padL - padR;
+const innerH = H - padT - padB;
+
 interface VarianceBridgeProps {
   steps: BridgeStep[];
   viewType?: ViewType;
+  clientType?: ClientType;
+  selectedMonth?: string;
 }
 
-export function VarianceBridge({ steps, viewType = 'monthly' }: VarianceBridgeProps) {
+function formatMoney(x: number, cur = '$') {
+  const sign = x < 0 ? '-' : '';
+  const v = Math.abs(x);
+  if (v >= 1e6) return `${sign}${cur}${(v / 1e6).toFixed(2)}m`;
+  if (v >= 1e3) return `${sign}${cur}${(v / 1e3).toFixed(1)}k`;
+  return `${sign}${cur}${v.toFixed(0)}`;
+}
+
+const TOP_N = 3;
+
+export function VarianceBridge({ steps, viewType = 'monthly', clientType, selectedMonth }: VarianceBridgeProps) {
   const [selectedStep, setSelectedStep] = useState<BridgeStep | null>(null);
-  const stepsRef = useRef<BridgeStep[]>([]);
-  
-  // Transform steps based on viewType
+  const [loadingBreakdown, setLoadingBreakdown] = useState(false);
+  const [hoverTooltip, setHoverTooltip] = useState<{
+    stepLabel: string;
+    stepValue: number;
+    topPos: Array<{ name: string; value: number }>;
+    topNeg: Array<{ name: string; value: number }>;
+    x: number;
+    y: number;
+  } | null>(null);
+  const [tooltipLoading, setTooltipLoading] = useState(false);
+  const [tooltipAnchor, setTooltipAnchor] = useState<{ x: number; y: number } | null>(null);
+  const breakdownCacheRef = useRef<Record<string, ClientDetail[]>>({});
+
   const transformedSteps = useMemo(() => {
-    if (viewType === 'monthly') {
-      stepsRef.current = steps;
-      return steps;
-    }
-    // For quarterly/annual cumulative, we would aggregate data here
-    // For now, return steps as-is (can be enhanced with actual aggregation logic)
-    stepsRef.current = steps;
+    if (viewType === 'monthly') return steps;
     return steps;
   }, [steps, viewType]);
-  const svgRef = useRef<SVGSVGElement>(null);
 
-  const formatMoney = (x: number, cur = '$') => {
-    const sign = x < 0 ? '-' : '';
-    const v = Math.abs(x);
-    if (v >= 1e6) return `${sign}${cur}${(v / 1e6).toFixed(2)}m`;
-    if (v >= 1e3) return `${sign}${cur}${(v / 1e3).toFixed(1)}k`;
-    return `${sign}${cur}${v.toFixed(0)}`;
-  };
-
-  useEffect(() => {
-    if (!svgRef.current) return;
-
-    const svg = svgRef.current;
-    const W = 1200;
-    const H = 600; // Increased height for better vertical space utilization
-    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
-    svg.innerHTML = '';
-
-    const padL = 80;
-    const padR = 40;
-    const padT = 50;
-    const padB = 80;
-    const innerW = W - padL - padR;
-    const innerH = H - padT - padB;
-
-    // Compute running totals
+  const chartData = useMemo(() => {
+    const s = transformedSteps;
     let running = 0;
-    const series = steps.map((s, i) => {
+    const series = s.map((step, i) => {
       if (i === 0) {
-        running = s.value;
-        return { ...s, start: 0, end: s.value, isTotal: true };
+        running = step.value;
+        return { ...step, start: 0, end: step.value, isTotal: true };
       }
-      if (i === steps.length - 1) {
-        return { ...s, start: 0, end: s.value, isTotal: true };
+      if (i === s.length - 1) {
+        return { ...step, start: 0, end: step.value, isTotal: true };
       }
       const start = running;
-      const end = running + s.value;
+      const end = running + step.value;
       running = end;
-      return { ...s, start, end, isTotal: false };
+      return { ...step, start, end, isTotal: false };
     });
 
-    const minY = Math.min(...series.map((s) => Math.min(s.start, s.end, s.value)));
-    const maxY = Math.max(...series.map((s) => Math.max(s.start, s.end, s.value)));
+    const minY = Math.min(...series.map((x) => Math.min(x.start, x.end, x.value)));
+    const maxY = Math.max(...series.map((x) => Math.max(x.start, x.end, x.value)));
     const span = maxY - minY || 1;
-    const yMin = Math.max(0, minY - span * 0.1);
-    const yMax = maxY + span * 0.15;
+    // Y-axis starts at 500k so driver bars are visible; max = data max + padding
+    const Y_AXIS_FLOOR = 500_000;
+    const yMin = Y_AXIS_FLOOR;
+    const yMax = maxY + Math.max(span * 0.12, 50_000);
 
     const yScale = (v: number) => {
       const t = (v - yMin) / (yMax - yMin);
       return padT + (1 - t) * innerH;
     };
+    const clampToVisible = (v: number) => Math.max(yMin, Math.min(yMax, v));
 
     const n = series.length;
     const gap = 20;
     const barW = (innerW - gap * (n - 1)) / n;
 
-    // Gridlines - dotted style
+    const gridLines = [];
     const glCount = 4;
     for (let i = 0; i <= glCount; i++) {
       const gv = yMin + (yMax - yMin) * (i / glCount);
-      const y = yScale(gv);
-      
-      // Dotted gridline
-      const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-      line.setAttribute('x1', padL.toString());
-      line.setAttribute('x2', (W - padR).toString());
-      line.setAttribute('y1', y.toString());
-      line.setAttribute('y2', y.toString());
-      line.setAttribute('stroke', 'rgba(30, 27, 75, 0.08)');
-      line.setAttribute('stroke-width', '1');
-      line.setAttribute('stroke-dasharray', '4,4');
-      svg.appendChild(line);
-
-      // Y-axis label
-      const tx = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-      tx.setAttribute('x', (padL - 10).toString());
-      tx.setAttribute('y', (y + 4).toString());
-      tx.setAttribute('text-anchor', 'end');
-      tx.setAttribute('fill', 'rgba(30, 27, 75, 0.6)');
-      tx.setAttribute('font-size', '12');
-      tx.setAttribute('font-family', '"DM Sans", ui-sans-serif, system-ui, sans-serif');
-      tx.setAttribute('font-weight', '500');
-      tx.textContent = formatMoney(gv);
-      svg.appendChild(tx);
+      gridLines.push({ gv, y: yScale(gv) });
     }
 
-    // Bars
+    const barData: Array<{
+      step: typeof series[0];
+      stepIndex: number;
+      x: number;
+      top: number;
+      height: number;
+      width: number;
+      fill: string;
+      valueText: string;
+      hasClick: boolean;
+    }> = [];
+    const connectors: Array<{ x1: number; x2: number; y: number }> = [];
+    const xLabels: Array<{ x: number; y: number; text: string }> = [];
+
     for (let i = 0; i < n; i++) {
-      const s = series[i];
+      const step = series[i];
       const x = padL + i * (barW + gap);
 
       let y0: number, y1: number;
       let fill: string;
-      if (!s.isTotal) {
-        y0 = yScale(s.start);
-        y1 = yScale(s.end);
-        fill = s.value >= 0 ? '#0d9488' : '#dc2626';
+      if (!step.isTotal) {
+        y0 = yScale(step.start);
+        y1 = yScale(step.end);
+        fill = step.value >= 0 ? '#0d9488' : '#dc2626';
       } else {
-        y0 = yScale(0);
-        y1 = yScale(s.value);
+        // Total bars (Plan/Actual): clamp to visible range so axis can start above 0
+        const v0 = clampToVisible(0);
+        const v1 = clampToVisible(step.value);
+        y0 = yScale(v0);
+        y1 = yScale(v1);
         fill = '#1e1b4b';
       }
 
       const top = Math.min(y0, y1);
-      const height = Math.abs(y1 - y0);
+      const height = Math.max(2, Math.abs(y1 - y0));
 
-      // Bar with rounded top
-      const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-      rect.setAttribute('x', x.toString());
-      rect.setAttribute('y', top.toString());
-      rect.setAttribute('width', barW.toString());
-      rect.setAttribute('height', Math.max(2, height).toString());
-      rect.setAttribute('rx', '8');
-      rect.setAttribute('ry', '8');
-      rect.setAttribute('fill', fill);
-      rect.setAttribute('stroke', 'none');
-      if (!s.isTotal && s.clientDetails && s.clientDetails.length > 0) {
-        rect.setAttribute('style', 'cursor: pointer;');
-        rect.setAttribute('data-step-index', i.toString());
-      }
-      svg.appendChild(rect);
+      const hasDetails = !step.isTotal && (step.clientDetails?.length ?? 0) > 0;
+      const hasBreakdownTab = !step.isTotal && !!getBreakdownGid(clientType, step.label);
 
-      // Connector lines between bars (for waterfall effect)
+      barData.push({
+        step,
+        stepIndex: i,
+        x,
+        top,
+        height,
+        width: barW,
+        fill,
+        valueText: formatMoney(step.value),
+        hasClick: !!(hasDetails || hasBreakdownTab),
+      });
+
       if (i > 0 && i < n - 1) {
-        const currStart = s.start;
-        const yConn = yScale(currStart);
-        const x1 = x - gap;
-        const conn = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-        conn.setAttribute('x1', (x1 + barW).toString());
-        conn.setAttribute('x2', x.toString());
-        conn.setAttribute('y1', yConn.toString());
-        conn.setAttribute('y2', yConn.toString());
-        conn.setAttribute('stroke', 'rgba(30, 27, 75, 0.2)');
-        conn.setAttribute('stroke-width', '2');
-        svg.appendChild(conn);
+        const yConn = yScale(clampToVisible(step.start));
+        connectors.push({ x1: x - gap + barW, x2: x, y: yConn });
       }
 
-      // Value label at top of bar
-      const displayValue = s.isTotal ? s.value : s.value;
-      const vLbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-      vLbl.setAttribute('x', (x + barW / 2).toString());
-      vLbl.setAttribute('y', (top - 12).toString());
-      vLbl.setAttribute('text-anchor', 'middle');
-      vLbl.setAttribute('fill', '#1e1b4b');
-      vLbl.setAttribute('font-size', '14');
-      vLbl.setAttribute('font-family', '"DM Sans", ui-sans-serif, system-ui, sans-serif');
-      vLbl.setAttribute('font-weight', '700');
-      vLbl.textContent = formatMoney(displayValue);
-      svg.appendChild(vLbl);
-
-      // X-axis label
-      const xLbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-      xLbl.setAttribute('x', (x + barW / 2).toString());
-      xLbl.setAttribute('y', (H - padB + 20).toString());
-      xLbl.setAttribute('text-anchor', 'middle');
-      xLbl.setAttribute('fill', '#1e1b4b');
-      xLbl.setAttribute('font-size', '13');
-      xLbl.setAttribute('font-weight', '600');
-      xLbl.textContent = s.label;
-      svg.appendChild(xLbl);
+      xLabels.push({ x: x + barW / 2, y: H - padB + 20, text: step.label });
     }
 
-    // Add click handlers to bars - cleanup old listeners first
-    if (svgRef.current) {
-      // Remove old event listeners by cloning the SVG
-      const oldBars = svgRef.current.querySelectorAll('rect[data-step-index]');
-      oldBars.forEach((bar) => {
-        const newBar = bar.cloneNode(true);
-        bar.parentNode?.replaceChild(newBar, bar);
-      });
+    return { gridLines, barData, connectors, xLabels };
+  }, [transformedSteps, clientType]);
 
-      const bars = svgRef.current.querySelectorAll('rect[data-step-index]');
-      bars.forEach((bar) => {
-        const clickHandler = () => {
-          const idx = parseInt(bar.getAttribute('data-step-index') || '0', 10);
-          const step = stepsRef.current[idx];
-          if (step && step.clientDetails && Array.isArray(step.clientDetails) && step.clientDetails.length > 0) {
-            setSelectedStep(step);
-          }
-        };
-        bar.addEventListener('click', clickHandler);
-        bar.addEventListener('mouseenter', () => {
-          (bar as SVGElement).setAttribute('opacity', '0.8');
-        });
-        bar.addEventListener('mouseleave', () => {
-          (bar as SVGElement).setAttribute('opacity', '1');
-        });
+  const getBreakdownForStep = async (step: BridgeStep): Promise<ClientDetail[]> => {
+    if (step.clientDetails && step.clientDetails.length > 0) return step.clientDetails;
+    const cacheKey = `${clientType ?? ''}-${step.label}-${step.label === 'Fixed fee difference' ? (selectedMonth ?? '') : ''}`;
+    const cached = breakdownCacheRef.current[cacheKey];
+    if (cached) return cached;
+    const gid = getBreakdownGid(clientType, step.label);
+    if (gid == null) return [];
+    const csv = await fetchSheetCsv(gid);
+    const details = step.label === 'Fixed fee difference' && selectedMonth
+      ? parseFixedFeeBreakdownCsv(csv, selectedMonth)
+      : parseBreakdownCsv(csv, step.label);
+    if (details.length > 0) breakdownCacheRef.current[cacheKey] = details;
+    return details;
+  };
+
+  const handleBarMouseEnter = (b: { step: BridgeStep; stepIndex: number }, e: React.MouseEvent<SVGRectElement>) => {
+    if (!b.step || b.step.kind === 'total') return;
+    const gid = getBreakdownGid(clientType, b.step.label);
+    if (gid == null && !(b.step.clientDetails && b.step.clientDetails.length > 0)) return;
+    const rect = (e.currentTarget as SVGElement).getBoundingClientRect();
+    const anchorX = rect.left + rect.width / 2;
+    const anchorY = rect.top;
+    setTooltipAnchor({ x: anchorX, y: anchorY });
+    setTooltipLoading(true);
+    getBreakdownForStep(b.step).then((details) => {
+      const isVolume = b.step.label.toLowerCase().includes('volume');
+      const isPrice = b.step.label.toLowerCase().includes('price');
+      const getDisplayVariance = (d: ClientDetail) => {
+        const raw = d.variance ?? 0;
+        if (isVolume) {
+          const volDelta = (d.actualVolume ?? d.actualValue ?? 0) - (d.planVolume ?? d.planValue ?? 0);
+          return raw > 0 && volDelta < 0 ? -raw : raw;
+        }
+        if (isPrice) {
+          const priceDelta = (d.actualPrice ?? d.actualValue ?? 0) - (d.planPrice ?? d.planValue ?? 0);
+          return raw > 0 && priceDelta < 0 ? -raw : raw;
+        }
+        return raw;
+      };
+      const withVariance = details.filter((d) => d != null && isFinite(d.variance)).map((d) => ({ ...d, displayVariance: getDisplayVariance(d) }));
+      const topPos = [...withVariance].filter((d) => d.displayVariance > 0).sort((a, b) => b.displayVariance - a.displayVariance).slice(0, TOP_N).map((d) => ({ name: d.clientName || '', value: d.displayVariance }));
+      const topNeg = [...withVariance].filter((d) => d.displayVariance < 0).sort((a, b) => a.displayVariance - b.displayVariance).slice(0, TOP_N).map((d) => ({ name: d.clientName || '', value: d.displayVariance }));
+      setHoverTooltip({
+        stepLabel: b.step.label,
+        stepValue: b.step.value,
+        topPos,
+        topNeg,
+        x: anchorX,
+        y: anchorY,
       });
+    }).catch(() => setHoverTooltip(null)).finally(() => { setTooltipLoading(false); });
+  };
+
+  const handleBarMouseLeave = () => {
+    setHoverTooltip(null);
+    setTooltipLoading(false);
+    setTooltipAnchor(null);
+  };
+
+  const handleBarClick = async (step: BridgeStep, _stepIndex: number) => {
+    if (step.kind === 'total') return;
+    if (step.clientDetails && Array.isArray(step.clientDetails) && step.clientDetails.length > 0) {
+      setSelectedStep(step);
+      return;
     }
-  }, [transformedSteps]);
+    const gid = getBreakdownGid(clientType, step.label);
+    if (gid == null) return;
+    setLoadingBreakdown(true);
+    try {
+      const csv = await fetchSheetCsv(gid);
+      const clientDetails = step.label === 'Fixed fee difference' && selectedMonth
+        ? parseFixedFeeBreakdownCsv(csv, selectedMonth)
+        : parseBreakdownCsv(csv, step.label);
+      if (clientDetails.length > 0) {
+        setSelectedStep({ ...step, clientDetails });
+      }
+    } catch (e) {
+      console.warn('Failed to load breakdown for', step.label, e);
+    } finally {
+      setLoadingBreakdown(false);
+    }
+  };
 
   return (
     <div className="sales-chart-card" style={{ background: '#ffffff' }}>
@@ -231,14 +262,181 @@ export function VarianceBridge({ steps, viewType = 'monthly' }: VarianceBridgePr
             Variance Bridge (Waterfall)
           </div>
           <div className="sales-chart-sub" style={{ fontSize: '13px', color: 'rgba(30, 27, 75, 0.6)', lineHeight: '1.4' }}>
-            Plan → drivers → Actual (reporting currency). Bridge sequencing: Plan → Volume @ plan price → Price @ actual volume → Timing → Unknown churn → FX → Actual.
+            Plan → drivers → Actual (reporting currency). Bridge: Plan → Fixed fee difference → Volume → Price → Timing → Unknown churn → FX → Residual → Actual.
             {viewType !== 'monthly' && ` Showing ${viewType.replace('-', ' ')} view.`}
           </div>
         </div>
       </div>
-      <div className="sales-chart-body" style={{ padding: '24px', minHeight: '650px' }}>
+      <div className="sales-chart-body" style={{ padding: '24px', minHeight: '650px', position: 'relative' }}>
+        {loadingBreakdown && (
+          <div style={{ position: 'absolute', inset: 0, background: 'rgba(255,255,255,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10, borderRadius: '12px' }}>
+            <span style={{ fontSize: '14px', color: 'var(--sales-text-secondary)' }}>Loading breakdown…</span>
+          </div>
+        )}
+        {(hoverTooltip || (tooltipLoading && tooltipAnchor)) && (
+          <div
+            role="tooltip"
+            style={{
+              position: 'fixed',
+              left: hoverTooltip ? hoverTooltip.x : tooltipAnchor!.x,
+              top: hoverTooltip ? hoverTooltip.y : tooltipAnchor!.y,
+              transform: 'translate(-50%, calc(-100% - 8px))',
+              zIndex: 50,
+              minWidth: '200px',
+              maxWidth: '320px',
+              padding: '10px 12px',
+              background: 'var(--sales-surface)',
+              border: '1px solid var(--sales-border)',
+              borderRadius: 'var(--sales-radius-sm)',
+              boxShadow: 'var(--sales-shadow-hover)',
+              fontSize: '12px',
+              fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif',
+              pointerEvents: 'none',
+            }}
+          >
+            {tooltipLoading && !hoverTooltip && <span style={{ color: 'var(--sales-muted)' }}>Loading…</span>}
+            {hoverTooltip && (
+              <>
+                <div style={{ fontWeight: '700', color: 'var(--sales-text)', marginBottom: '8px' }}>
+                  {hoverTooltip.stepLabel}
+                </div>
+                {hoverTooltip.topPos.length > 0 && (
+                  <div style={{ marginBottom: '6px' }}>
+                    <div style={{ color: '#0d9488', fontWeight: '600', marginBottom: '2px' }}>Top 3 positive</div>
+                    {hoverTooltip.topPos.map((c, i) => (
+                      <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: '8px' }}>
+                        <span style={{ color: 'var(--sales-text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</span>
+                        <span style={{ color: '#0d9488', fontWeight: '600', flexShrink: 0 }}>{formatMoney(c.value)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {hoverTooltip.topNeg.length > 0 && (
+                  <div>
+                    <div style={{ color: '#dc2626', fontWeight: '600', marginBottom: '2px' }}>Top 3 negative</div>
+                    {hoverTooltip.topNeg.map((c, i) => (
+                      <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: '8px' }}>
+                        <span style={{ color: 'var(--sales-text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</span>
+                        <span style={{ color: '#dc2626', fontWeight: '600', flexShrink: 0 }}>{formatMoney(c.value)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {hoverTooltip.topPos.length === 0 && hoverTooltip.topNeg.length === 0 && (
+                  <span style={{ color: 'var(--sales-muted)' }}>No contributors</span>
+                )}
+              </>
+            )}
+          </div>
+        )}
         <div style={{ width: '100%', overflow: 'auto', paddingBottom: '6px' }}>
-          <svg ref={svgRef} width="1200" height="600" viewBox="0 0 1200 600" style={{ display: 'block', width: '100%', height: 'auto', maxHeight: '600px' }}></svg>
+          <svg
+            width={W}
+            height={H}
+            viewBox={`0 0 ${W} ${H}`}
+            style={{ display: 'block', width: '100%', height: 'auto', maxHeight: '600px' }}
+            className="sales-waterfall-svg"
+          >
+            <defs>
+              <style>{`
+                .sales-waterfall-bar {
+                  transition: y 0.35s ease-out, height 0.35s ease-out, fill 0.25s ease-out;
+                }
+                .sales-waterfall-bar:hover {
+                  opacity: 0.85;
+                }
+                .sales-waterfall-value {
+                  transition: y 0.35s ease-out;
+                }
+                .sales-waterfall-connector {
+                  transition: y 0.35s ease-out;
+                }
+              `}</style>
+            </defs>
+            {/* Gridlines */}
+            {chartData.gridLines.map((gl, i) => (
+              <g key={i}>
+                <line
+                  x1={padL}
+                  x2={W - padR}
+                  y1={gl.y}
+                  y2={gl.y}
+                  stroke="rgba(30, 27, 75, 0.08)"
+                  strokeWidth={1}
+                  strokeDasharray="4,4"
+                />
+                <text
+                  x={padL - 10}
+                  y={gl.y + 4}
+                  textAnchor="end"
+                  fill="rgba(30, 27, 75, 0.6)"
+                  fontSize={12}
+                  fontFamily='"DM Sans", ui-sans-serif, system-ui, sans-serif'
+                  fontWeight={500}
+                >
+                  {formatMoney(gl.gv)}
+                </text>
+              </g>
+            ))}
+            {/* Connectors */}
+            {chartData.connectors.map((c, i) => (
+              <line
+                key={i}
+                className="sales-waterfall-connector"
+                x1={c.x1}
+                x2={c.x2}
+                y1={c.y}
+                y2={c.y}
+                stroke="rgba(30, 27, 75, 0.2)"
+                strokeWidth={2}
+              />
+            ))}
+            {/* Bars */}
+            {chartData.barData.map((b) => (
+              <g key={b.stepIndex}>
+                <rect
+                  className="sales-waterfall-bar"
+                  x={b.x}
+                  y={b.top}
+                  width={b.width}
+                  height={b.height}
+                  rx={8}
+                  ry={8}
+                  fill={b.fill}
+                  style={{ cursor: b.hasClick ? 'pointer' : 'default' }}
+                  onClick={() => b.hasClick && handleBarClick(b.step, b.stepIndex)}
+                  onMouseEnter={b.hasClick ? (e) => handleBarMouseEnter(b, e) : undefined}
+                  onMouseLeave={b.hasClick ? handleBarMouseLeave : undefined}
+                />
+                <text
+                  className="sales-waterfall-value"
+                  x={b.x + b.width / 2}
+                  y={b.top - 12}
+                  textAnchor="middle"
+                  fill="#1e1b4b"
+                  fontSize={14}
+                  fontFamily='"DM Sans", ui-sans-serif, system-ui, sans-serif'
+                  fontWeight={700}
+                >
+                  {b.valueText}
+                </text>
+              </g>
+            ))}
+            {/* X-axis labels */}
+            {chartData.xLabels.map((xl, i) => (
+              <text
+                key={i}
+                x={xl.x}
+                y={xl.y}
+                textAnchor="middle"
+                fill="#1e1b4b"
+                fontSize={13}
+                fontWeight={600}
+              >
+                {xl.text}
+              </text>
+            ))}
+          </svg>
         </div>
         <div style={{ display: 'flex', justifyContent: 'center', flexWrap: 'wrap', gap: '16px', marginTop: '20px', fontSize: '12px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>

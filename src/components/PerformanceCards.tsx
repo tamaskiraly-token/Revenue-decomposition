@@ -4,10 +4,6 @@ interface PerformanceCardsProps {
   actual: number;
   variance: number;
   varPct: number;
-  planDelay: number;
-  actualDelay: number;
-  planFX: number;
-  actualFX: number;
 }
 
 export function PerformanceCards({
@@ -15,10 +11,6 @@ export function PerformanceCards({
   actual,
   variance,
   varPct,
-  planDelay,
-  actualDelay,
-  planFX,
-  actualFX,
 }: PerformanceCardsProps) {
   const formatMoney = (x: number, cur = '$') => {
     const sign = x < 0 ? '-' : '';
@@ -37,18 +29,10 @@ export function PerformanceCards({
       <div className="sales-kpi-card">
         <div className="sales-kpi-label">Planned recognized revenue</div>
         <div className="sales-kpi-value">{formatMoney(planRec)}</div>
-        <div className="sales-kpi-delta">
-          <span className="dot neutral"></span>
-          <span>Delay {formatPct(planDelay)} · FX {planFX.toFixed(4)}</span>
-        </div>
       </div>
       <div className="sales-kpi-card">
         <div className="sales-kpi-label">Actual recognized revenue</div>
         <div className="sales-kpi-value">{formatMoney(actual)}</div>
-        <div className="sales-kpi-delta">
-          <span className="dot neutral"></span>
-          <span>Delay {formatPct(actualDelay)} · FX {actualFX.toFixed(4)}</span>
-        </div>
       </div>
       <div className="sales-kpi-card">
         <div className="sales-kpi-label">Variance (Actual − Plan)</div>

@@ -614,6 +614,12 @@ body {
   overflow: hidden;
 }
 
+.sales-modal--large {
+  width: min(95vw, 1200px);
+  max-width: min(95vw, 1200px);
+  max-height: 90vh;
+}
+
 .sales-modal-header {
   display: flex;
   align-items: center;
@@ -689,6 +695,37 @@ body {
   padding: 12px;
   border-bottom: 1px solid var(--sales-border);
   color: var(--sales-text);
+}
+
+/* Driver contribution table: fade-in when data changes */
+.sales-driver-table tbody tr {
+  animation: sales-driver-row-in 0.35s ease-out;
+}
+
+@keyframes sales-driver-row-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.sales-modal-table--compact {
+  font-size: 12px;
+}
+
+.sales-modal-table--compact th,
+.sales-modal-table--compact td {
+  padding: 8px 10px;
+}
+
+.sales-modal-cell-client {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 200px;
+  min-width: 120px;
 }
 
 .sales-modal-cell-name {

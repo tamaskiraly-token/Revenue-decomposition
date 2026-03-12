@@ -14,17 +14,15 @@ interface TopNavProps {
   onMonthChange: (month: string) => void;
 }
 
+/** Data is only available up to February; only Jan and Feb are offered. */
+const DATA_YEAR = 2026;
+const MONTHS_AVAILABLE: { value: string; label: string }[] = [
+  { value: `${DATA_YEAR}-01`, label: `Jan ${DATA_YEAR}` },
+  { value: `${DATA_YEAR}-02`, label: `Feb ${DATA_YEAR}` },
+];
+
 export function Sidebar({ activeTab, onTabChange, selectedMonth, onMonthChange }: TopNavProps) {
-  const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  const now = new Date();
-  const months: { value: string; label: string }[] = [];
-  
-  for (let i = 0; i < 6; i++) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-    const label = `${monthNames[d.getMonth()]} ${d.getFullYear()}`;
-    const value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-    months.push({ value, label });
-  }
+  const months = MONTHS_AVAILABLE;
 
   return (
     <nav className="sales-top-nav">

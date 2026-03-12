@@ -39,10 +39,10 @@ export function DriverContribution({ drivers, variance, viewType = 'monthly' }: 
   const ranked = [...transformedDrivers].sort((a, b) => Math.abs(b.value) - Math.abs(a.value));
   const totalAbs = ranked.reduce((s, d) => s + Math.abs(d.value), 0) || 1;
 
-  const other = drivers.find((d) => d.name.includes('Other') || d.name.includes('residual'));
-  const absOther = other ? Math.abs(other.value) : 0;
+  const residual = drivers.find((d) => d.name.includes('Residual') || d.name.includes('residual'));
+  const absResidual = residual ? Math.abs(residual.value) : 0;
   const absVar = Math.abs(variance);
-  const otherShare = absVar > 0 ? absOther / absVar : 0;
+  const residualShare = absVar > 0 ? absResidual / absVar : 0;
 
   return (
     <div className="sales-chart-card">
@@ -55,7 +55,7 @@ export function DriverContribution({ drivers, variance, viewType = 'monthly' }: 
       </div>
       <div className="sales-chart-body">
         <div style={{ overflowX: 'auto' }}>
-          <table className="sales-modal-table" style={{ width: '100%' }}>
+          <table className="sales-modal-table sales-driver-table" style={{ width: '100%' }}>
             <thead>
               <tr>
                 <th style={{ width: '34%' }}>Driver</th>
@@ -64,7 +64,7 @@ export function DriverContribution({ drivers, variance, viewType = 'monthly' }: 
                 <th>Explanation</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody key={ranked.map((d) => `${d.name}:${d.value}`).join('|')}>
               {ranked.map((d) => {
                 const cls = d.value >= 0 ? 'pos' : 'neg';
                 const share = Math.abs(d.value) / totalAbs;
@@ -105,9 +105,9 @@ export function DriverContribution({ drivers, variance, viewType = 'monthly' }: 
             </tbody>
           </table>
         </div>
-        {other && (
+        {residual && (
           <div style={{ marginTop: '10px', fontSize: '12px', color: 'var(--sales-muted)', lineHeight: '1.35' }}>
-            Sanity check: "Other / residual" is <span style={{ fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif', fontWeight: '600' }}>{formatMoney(other.value)}</span> ({otherShare.toFixed(1)}% of total variance). Ideally this stays small over time.
+            Sanity check: Residual is <span style={{ fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif', fontWeight: '600' }}>{formatMoney(residual.value)}</span> ({residualShare.toFixed(1)}% of total variance). Ideally this stays small over time.
           </div>
         )}
       </div>
