@@ -37,7 +37,6 @@ export function DriverContribution({ drivers, variance, viewType = 'monthly' }: 
 
   // Rank by absolute contribution
   const ranked = [...transformedDrivers].sort((a, b) => Math.abs(b.value) - Math.abs(a.value));
-  const totalAbs = ranked.reduce((s, d) => s + Math.abs(d.value), 0) || 1;
 
   const residual = drivers.find((d) => d.name.includes('Residual') || d.name.includes('residual'));
   const absResidual = residual ? Math.abs(residual.value) : 0;
@@ -62,13 +61,14 @@ export function DriverContribution({ drivers, variance, viewType = 'monthly' }: 
               <tr>
                 <th style={{ width: '1%', minWidth: 80 }}>Driver</th>
                 <th style={{ width: '100px', textAlign: 'right', whiteSpace: 'nowrap' }}>Contribution</th>
-                <th style={{ width: '72px', textAlign: 'right', whiteSpace: 'nowrap' }}>Share (abs)</th>
+                <th style={{ width: '72px', textAlign: 'right', whiteSpace: 'nowrap' }}>Share</th>
               </tr>
             </thead>
             <tbody key={ranked.map((d) => `${d.name}:${d.value}`).join('|')}>
               {ranked.map((d) => {
                 const cls = d.value >= 0 ? 'pos' : 'neg';
-                const share = Math.abs(d.value) / totalAbs;
+                // Signed share: driver value / total variance (e.g. Price +45k of +50k variance = 90%)
+                const share = variance !== 0 ? d.value / variance : 0;
                 const hasDetails = d.clientDetails && d.clientDetails.length > 0;
                 return (
                   <tr 
@@ -96,7 +96,7 @@ export function DriverContribution({ drivers, variance, viewType = 'monthly' }: 
                     <td className={`num ${cls}`} style={{ textAlign: 'right', fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif', color: cls === 'pos' ? '#0d9488' : '#dc2626', whiteSpace: 'nowrap' }}>
                       {formatMoney(d.value)}
                     </td>
-                    <td className="num" style={{ textAlign: 'right', fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif', whiteSpace: 'nowrap' }}>
+                    <td className={`num ${cls}`} style={{ textAlign: 'right', fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif', whiteSpace: 'nowrap', color: share >= 0 ? '#0d9488' : '#dc2626' }}>
                       {(share * 100).toFixed(1)}%
                     </td>
                   </tr>
