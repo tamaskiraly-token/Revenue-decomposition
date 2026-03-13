@@ -63,6 +63,8 @@ export function DriverDetailModal({ driverName, driverValue, clientDetails, onCl
   const isTiming = driverName.toLowerCase().includes('timing');
   const isChurn = driverName.toLowerCase().includes('churn');
   const isFX = driverName.toLowerCase().includes('fx');
+  // New clients timing breakdown is excel-like (Currency / Revenue component / Amounts / FX Plan / TOTAL / Comment)
+  const timingExcelLike = isTiming && clientDetails.some(d => !!d.currency || !!d.revenueComponent || d.planFxRate != null || !!d.comment);
 
   const [totalSortOrder, setTotalSortOrder] = useState<'asc' | 'desc'>('desc');
 
@@ -173,11 +175,25 @@ export function DriverDetailModal({ driverName, driverValue, clientDetails, onCl
                   )}
                   {isTiming && (
                     <>
-                      <th style={{ width: '18%', textAlign: 'center' }}>Plan Date</th>
-                      <th style={{ width: '18%', textAlign: 'center' }}>Actual Date</th>
-                      <th style={{ width: '15%', textAlign: 'right' }}>Days Delay</th>
-                      <th style={{ width: '12%', textAlign: 'right' }}>Impact</th>
-                      <th style={{ width: '12%', textAlign: 'right' }}>Revenue Impact</th>
+                      {timingExcelLike ? (
+                        <>
+                          <th style={{ width: '12%', textAlign: 'left' }}>Currency</th>
+                          <th style={{ width: '14%', textAlign: 'left' }}>Revenue component</th>
+                          <th style={{ width: '12%', textAlign: 'right' }}>Amount (Act)</th>
+                          <th style={{ width: '12%', textAlign: 'right' }}>Amount (Plan)</th>
+                          <th style={{ width: '10%', textAlign: 'right' }}>FX Plan</th>
+                          <th style={{ width: '12%', textAlign: 'right' }}>TOTAL</th>
+                          <th style={{ width: '16%', textAlign: 'left' }}>Comment</th>
+                        </>
+                      ) : (
+                        <>
+                          <th style={{ width: '18%', textAlign: 'center' }}>Plan Date</th>
+                          <th style={{ width: '18%', textAlign: 'center' }}>Actual Date</th>
+                          <th style={{ width: '15%', textAlign: 'right' }}>Days Delay</th>
+                          <th style={{ width: '12%', textAlign: 'right' }}>Impact</th>
+                          <th style={{ width: '12%', textAlign: 'right' }}>Revenue Impact</th>
+                        </>
+                      )}
                     </>
                   )}
                   {isChurn && (
@@ -307,31 +323,58 @@ export function DriverDetailModal({ driverName, driverValue, clientDetails, onCl
                       )}
                       {isTiming && (
                         <>
-                          <td style={{ textAlign: 'center', fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif' }}>
-                            {detail.planDate ?? '—'}
-                          </td>
-                          <td style={{ textAlign: 'center', fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif' }}>
-                            {detail.actualDate ?? '—'}
-                          </td>
-                          <td className={`num ${detail.daysDelay != null && detail.daysDelay > 0 ? 'neg' : 'pos'}`} style={{ 
-                            textAlign: 'right', 
-                            fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif',
-                            fontWeight: '700',
-                            color: detail.daysDelay && detail.daysDelay > 0 ? '#dc2626' : '#0d9488'
-                          }}>
-                            {(detail.daysDelay != null && detail.daysDelay > 0 ? '+' : '')}{(detail.daysDelay ?? 0)} days
-                          </td>
-                          <td style={{ textAlign: 'right', fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif', color: 'var(--sales-text-secondary)' }}>
-                            {detail.daysDelay != null && detail.daysDelay > 0 ? 'Delayed' : detail.daysDelay != null && detail.daysDelay < 0 ? 'Accelerated' : 'On time'}
-                          </td>
-                          <td className={`num ${cls}`} style={{ 
-                            textAlign: 'right', 
-                            fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif',
-                            fontWeight: '700',
-                            color: cls === 'pos' ? '#0d9488' : '#dc2626'
-                          }}>
-                            {formatMoney(detail.variance || 0)}
-                          </td>
+                          {timingExcelLike ? (
+                            <>
+                              <td style={{ fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif' }}>{detail.currency ?? '—'}</td>
+                              <td style={{ fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif' }}>{detail.revenueComponent ?? '—'}</td>
+                              <td className="num" style={{ textAlign: 'right', fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif' }}>
+                                {detail.actualValue != null && isFinite(detail.actualValue) ? formatMoney(detail.actualValue) : '—'}
+                              </td>
+                              <td className="num" style={{ textAlign: 'right', fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif' }}>
+                                {detail.planValue != null && isFinite(detail.planValue) ? formatMoney(detail.planValue) : '—'}
+                              </td>
+                              <td className="num" style={{ textAlign: 'right', fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif' }}>
+                                {(detail.planFxRate != null ? detail.planFxRate : planFX).toFixed(2)}
+                              </td>
+                              <td className={`num ${cls}`} style={{ 
+                                textAlign: 'right', 
+                                fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif',
+                                fontWeight: '700',
+                                color: cls === 'pos' ? '#0d9488' : '#dc2626'
+                              }}>
+                                {detail.variance != null && isFinite(detail.variance) ? formatMoney(detail.variance) : '—'}
+                              </td>
+                              <td style={{ fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif', color: 'var(--sales-text-secondary)' }}>{detail.comment ?? '—'}</td>
+                            </>
+                          ) : (
+                            <>
+                              <td style={{ textAlign: 'center', fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif' }}>
+                                {detail.planDate ?? '—'}
+                              </td>
+                              <td style={{ textAlign: 'center', fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif' }}>
+                                {detail.actualDate ?? '—'}
+                              </td>
+                              <td className={`num ${detail.daysDelay != null && detail.daysDelay > 0 ? 'neg' : 'pos'}`} style={{ 
+                                textAlign: 'right', 
+                                fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif',
+                                fontWeight: '700',
+                                color: detail.daysDelay && detail.daysDelay > 0 ? '#dc2626' : '#0d9488'
+                              }}>
+                                {(detail.daysDelay != null && detail.daysDelay > 0 ? '+' : '')}{(detail.daysDelay ?? 0)} days
+                              </td>
+                              <td style={{ textAlign: 'right', fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif', color: 'var(--sales-text-secondary)' }}>
+                                {detail.daysDelay != null && detail.daysDelay > 0 ? 'Delayed' : detail.daysDelay != null && detail.daysDelay < 0 ? 'Accelerated' : 'On time'}
+                              </td>
+                              <td className={`num ${cls}`} style={{ 
+                                textAlign: 'right', 
+                                fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif',
+                                fontWeight: '700',
+                                color: cls === 'pos' ? '#0d9488' : '#dc2626'
+                              }}>
+                                {formatMoney(detail.variance || 0)}
+                              </td>
+                            </>
+                          )}
                         </>
                       )}
                       {isChurn && (
@@ -512,14 +555,31 @@ export function DriverDetailModal({ driverName, driverValue, clientDetails, onCl
                   )}
                   {isTiming && (
                     <>
-                      <td colSpan={3}></td>
-                      <td className={`num ${totalVariance >= 0 ? 'pos' : 'neg'}`} style={{ 
-                        textAlign: 'right', 
-                        fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif',
-                        color: totalVariance >= 0 ? '#0d9488' : '#dc2626'
-                      }}>
-                        {formatMoney(totalVariance)}
-                      </td>
+                      {timingExcelLike ? (
+                        <>
+                          <td colSpan={5}></td>
+                          <td className={`num ${totalVariance >= 0 ? 'pos' : 'neg'}`} style={{
+                            textAlign: 'right',
+                            fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif',
+                            fontWeight: '700',
+                            color: totalVariance >= 0 ? '#0d9488' : '#dc2626'
+                          }}>
+                            {formatMoney(totalVariance)}
+                          </td>
+                          <td></td>
+                        </>
+                      ) : (
+                        <>
+                          <td colSpan={3}></td>
+                          <td className={`num ${totalVariance >= 0 ? 'pos' : 'neg'}`} style={{
+                            textAlign: 'right',
+                            fontFamily: '"DM Sans", ui-sans-serif, system-ui, sans-serif',
+                            color: totalVariance >= 0 ? '#0d9488' : '#dc2626'
+                          }}>
+                            {formatMoney(totalVariance)}
+                          </td>
+                        </>
+                      )}
                     </>
                   )}
                   {isChurn && (

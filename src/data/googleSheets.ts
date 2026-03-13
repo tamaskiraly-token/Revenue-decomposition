@@ -58,23 +58,47 @@ function parseNum(val: string): number {
 /** Map sheet row labels to dashboard step labels (existing and new customers waterfall). */
 const ROW_LABEL_TO_STEP: Record<string, string> = {
   'Plan': 'Plan',
+  'Planned revenue': 'Plan',
   'Fixed fee diff.': 'Fixed fee difference',
   'Fixed fee diff': 'Fixed fee difference',
   'Fixed fee': 'Fixed fee difference',
   'Fixed fee difference': 'Fixed fee difference',
+  'Fixed fee impact': 'Fixed fee difference',
+  'Fixed fee difference impact': 'Fixed fee difference',
+  'New clients – Fixed fee': 'Fixed fee difference',
   'Volume impact': 'Volume',
   'Volume': 'Volume',
+  'New clients – Volume': 'Volume',
   'Price impact': 'Price',
   'Price': 'Price',
+  'New clients – Price': 'Price',
   'FX impact': 'FX',
   'FX': 'FX',
   'Timing': 'Timing',
+  'Timing impact': 'Timing',
   'Unknown churn': 'Unknown churn',
   'Churn': 'Unknown churn',
   'Residual': 'Residual',
   'Other': 'Residual',
   'Actual': 'Actual',
+  'Actual revenue': 'Actual',
 };
+
+/** Fallback: infer step label from a free-text row label (for new-clients sheets with slightly different wording). */
+function inferStepLabel(label: string): string | undefined {
+  const t = label.trim().toLowerCase();
+  if (!t) return undefined;
+  if (/^plan\b/.test(t) || /planned/.test(t)) return 'Plan';
+  if (/^actual\b/.test(t) || /actual revenue/.test(t)) return 'Actual';
+  if (/fixed fee/.test(t) || /ff diff/.test(t) || (t.includes('fixed') && t.includes('fee'))) return 'Fixed fee difference';
+  if (/volume/.test(t)) return 'Volume';
+  if (/price/.test(t) || /pricing/.test(t)) return 'Price';
+  if (/\bfx\b/.test(t) || /foreign exchange/.test(t)) return 'FX';
+  if (/timing/.test(t) || /implementation/.test(t) || /go live/.test(t)) return 'Timing';
+  if (/churn/.test(t) || /attrition/.test(t)) return 'Unknown churn';
+  if (/residual/.test(t) || /other/.test(t) || /unexplained/.test(t)) return 'Residual';
+  return undefined;
+}
 
 /** Step labels in display order (for sorting). */
 const BRIDGE_STEP_ORDER = [
@@ -190,19 +214,30 @@ export function parseWaterfallCsv(csv: string, monthKey?: string): BridgeStepFro
   const labelCols = [0, 1]; // try label in first column, then second (in case column A is empty)
 
   for (const labelCol of labelCols) {
-    const valueCol = dataCol + labelCol; // data starts after label column(s)
     for (let r = startRow; r < rows.length; r++) {
       const row = rows[r];
       const labelCell = (row[labelCol] ?? '').trim();
-      const normalizedLabel = ROW_LABEL_TO_STEP[labelCell] ?? ROW_LABEL_TO_STEP[labelCell.replace(/\.$/, '')];
+      const normalizedLabel =
+        ROW_LABEL_TO_STEP[labelCell] ??
+        ROW_LABEL_TO_STEP[labelCell.replace(/\.$/, '')] ??
+        inferStepLabel(labelCell);
       if (!normalizedLabel) continue;
 
-      let value = parseNum(row[valueCol] ?? '');
-      if (!isFinite(value) && row.length > valueCol + 1) value = parseNum(row[valueCol + 1] ?? '');
+      // Try to read the value from the detected month column. Some sheets have an extra leading blank column,
+      // so we probe a few nearby columns as fallback (but avoid jumping to unrelated TOTAL columns).
+      const candidateCols = Array.from(new Set([dataCol, dataCol + 1, dataCol - 1, dataCol + labelCol].filter(c => c >= 0)));
+      let value = NaN;
+      for (const c of candidateCols) {
+        if (c >= row.length) continue;
+        const v = parseNum(row[c] ?? '');
+        if (isFinite(v)) { value = v; break; }
+      }
       if (!isFinite(value)) continue;
 
       if (!steps.some(s => s.label === normalizedLabel)) {
-        const signAdjusted = (normalizedLabel === 'Residual' || normalizedLabel === 'Fixed fee difference') ? -value : value;
+        // Only flip Fixed fee difference sign to match sheet convention.
+        // Residual must keep its original sign (positive stays positive).
+        const signAdjusted = normalizedLabel === 'Fixed fee difference' ? -value : value;
         steps.push({
           label: normalizedLabel,
           value: signAdjusted,
@@ -258,12 +293,22 @@ export function parseWaterfallCsv(csv: string, monthKey?: string): BridgeStepFro
       for (let r = planRow; r < rows.length; r++) {
         const row = rows[r];
         const labelCell = (row[labelCol] ?? '').trim();
-        const normalizedLabel = ROW_LABEL_TO_STEP[labelCell] ?? ROW_LABEL_TO_STEP[labelCell.replace(/\.$/, '')];
+        const normalizedLabel =
+          ROW_LABEL_TO_STEP[labelCell] ??
+          ROW_LABEL_TO_STEP[labelCell.replace(/\.$/, '')] ??
+          inferStepLabel(labelCell);
         if (!normalizedLabel) continue;
-        let value = parseNum(row[valueCol] ?? '');
-        if (!isFinite(value) && row.length > valueCol + 1) value = parseNum(row[valueCol + 1] ?? '');
+        const candidateCols = Array.from(new Set([valueCol, valueCol + 1, valueCol - 1].filter(c => c >= 0)));
+        let value = NaN;
+        for (const c of candidateCols) {
+          if (c >= row.length) continue;
+          const v = parseNum(row[c] ?? '');
+          if (isFinite(v)) { value = v; break; }
+        }
         if (!isFinite(value)) continue;
-        const signAdjusted = (normalizedLabel === 'Residual' || normalizedLabel === 'Fixed fee difference') ? -value : value;
+        // Only flip Fixed fee difference sign to match sheet convention.
+        // Residual must keep its original sign (positive stays positive).
+        const signAdjusted = normalizedLabel === 'Fixed fee difference' ? -value : value;
         steps.push({
           label: normalizedLabel,
           value: signAdjusted,
@@ -276,6 +321,30 @@ export function parseWaterfallCsv(csv: string, monthKey?: string): BridgeStepFro
   // Sort by bridge order so waterfall displays correctly
   const orderIdx = (label: string) => BRIDGE_STEP_ORDER.indexOf(label);
   steps.sort((a, b) => (orderIdx(a.label) >= 0 ? orderIdx(a.label) : 99) - (orderIdx(b.label) >= 0 ? orderIdx(b.label) : 99));
+
+  // Recalculate Residual programmatically so it exactly balances Plan → Actual
+  // and its sign always matches the true leftover variance from the sheet,
+  // independent of how the Residual row is stored.
+  const planStep = steps.find(s => s.label === 'Plan');
+  const actualStep = steps.find(s => s.label === 'Actual');
+  if (planStep && actualStep) {
+    const otherDriversSum = steps
+      .filter(s => s.label !== 'Plan' && s.label !== 'Actual' && s.label !== 'Residual')
+      .reduce((sum, s) => sum + s.value, 0);
+    const residualValue = actualStep.value - planStep.value - otherDriversSum;
+    const residualStep = steps.find(s => s.label === 'Residual');
+    if (residualStep) {
+      residualStep.value = residualValue;
+    } else if (Math.abs(residualValue) > 0) {
+      steps.push({
+        label: 'Residual',
+        value: residualValue,
+        kind: 'delta',
+      });
+      steps.sort((a, b) => (orderIdx(a.label) >= 0 ? orderIdx(a.label) : 99) - (orderIdx(b.label) >= 0 ? orderIdx(b.label) : 99));
+    }
+  }
+
   return steps;
 }
 
@@ -284,7 +353,7 @@ export function parseWaterfallCsv(csv: string, monthKey?: string): BridgeStepFro
  * Uses driverName to look for driver-specific columns (Volume, Price, Timing, Churn, FX); falls back to Plan/Actual/Variance.
  * Scans first few rows for header (sheet may have title or empty row 0).
  */
-export function parseBreakdownCsv(csv: string, driverName: string): ClientDetail[] {
+export function parseBreakdownCsv(csv: string, driverName: string, monthKey?: string): ClientDetail[] {
   const rows = parseCsv(csv);
   if (rows.length < 2) return [];
 
@@ -299,34 +368,72 @@ export function parseBreakdownCsv(csv: string, driverName: string): ClientDetail
   }
   const header = rows[headerRow].map(h => (h || '').trim().toLowerCase());
   const isChurn = driverName.toLowerCase().includes('churn');
-  const clientCol = header.findIndex(h => h === 'client' || h === 'client name' || (isChurn && (h === 'customer' || h === 'name')));
+  let clientCol = header.findIndex(h => h === 'client' || h === 'client name' || (isChurn && (h === 'customer' || h === 'name')));
   if (clientCol < 0) return [];
 
   const driver = driverName.toLowerCase();
 
+  // If the sheet has repeated month blocks (multiple \"Client\" headers), pick the block for selected month
+  let headerSlice = header;
+  let sliceStart = 0;
+  let sliceEnd = header.length;
+  const clientCols = header
+    .map((h, i) => ((h === 'client' || h === 'client name') ? i : -1))
+    .filter(i => i >= 0);
+  if (monthKey && clientCols.length > 1 && headerRow > 0) {
+    const monthNum = parseInt(monthKey.split('-')[1], 10);
+    const dateRow = rows[headerRow - 1].map(c => (c ?? '').trim().toLowerCase());
+    const matchMonth = (s: string) => {
+      if (!s) return false;
+      const isJan = /january|jan\b|31\/01|\/01\/|^01\//.test(s);
+      const isFeb = /february|feb\b|28\/02|\/02\/|^02\//.test(s);
+      if (monthNum === 1) return isJan;
+      if (monthNum === 2) return isFeb;
+      return false;
+    };
+    let blockStart = -1;
+    for (const c of clientCols) {
+      if (matchMonth(dateRow[c] ?? '')) { blockStart = c; break; }
+    }
+    if (blockStart < 0) blockStart = clientCols[0];
+    const nextClient = clientCols.find(c => c > blockStart) ?? header.length;
+    sliceStart = blockStart;
+    sliceEnd = nextClient;
+    headerSlice = header.slice(sliceStart, sliceEnd);
+    clientCol = blockStart;
+  }
+
+  const findInSlice = (pred: (h: string) => boolean) => {
+    const idx = headerSlice.findIndex(pred);
+    return idx >= 0 ? sliceStart + idx : -1;
+  };
+
   // Generic columns
-  const revLocalCol = header.findIndex(h => h.includes('revenue') && h.includes('local'));
-  const totalCol = header.findIndex(h => h === 'total');
-  const planCol = header.findIndex(h => h === 'plan' || h === 'plan value' || h === 'plan volume' || h === 'plan price');
-  const actualCol = header.findIndex(h => h === 'actual' || h === 'actual value' || h === 'actual volume' || h === 'actual price');
-  const varCol = header.findIndex(h => h === 'variance' || h === 'var' || h.includes('revenue impact') || h.includes('impact') || h === 'contribution');
-  const varPctCol = header.findIndex(h => (h.includes('variance') && h.includes('%')) || h === 'var %');
+  const revLocalCol = findInSlice(h => h.includes('revenue') && h.includes('local'));
+  const totalCol = findInSlice(h => h === 'total');
+  const planCol = findInSlice(h => h === 'plan' || h === 'plan value' || h === 'plan volume' || h === 'plan price' || (h.includes('amount') && h.includes('plan')));
+  const actualCol = findInSlice(h => h === 'actual' || h === 'actual value' || h === 'actual volume' || h === 'actual price' || (h.includes('amount') && (h.includes('act') || h.includes('actual'))));
+  const varCol = findInSlice(h => h === 'variance' || h === 'var' || h.includes('revenue impact') || (h.includes('impact') && !h.includes('fx')) || h === 'contribution');
+  const varPctCol = findInSlice(h => (h.includes('variance') && h.includes('%')) || h === 'var %');
   // Churn sheets often use "Amount", "Value", or "Revenue" for the impact value
-  const amountCol = isChurn ? header.findIndex(h => h === 'amount' || h === 'value' || (h.includes('revenue') && !h.includes('local'))) : -1;
+  const amountCol = isChurn ? findInSlice(h => h === 'amount' || h === 'value' || (h.includes('revenue') && !h.includes('local'))) : -1;
 
   // Driver-specific columns
-  const planVolumeCol = header.findIndex(h => h.includes('plan') && h.includes('volume'));
-  const actualVolumeCol = header.findIndex(h => h.includes('actual') && h.includes('volume'));
-  const planPriceCol = header.findIndex(h => h.includes('plan') && h.includes('price'));
-  const actualPriceCol = header.findIndex(h => h.includes('actual') && h.includes('price'));
-  const planDateCol = header.findIndex(h => h.includes('plan') && h.includes('date'));
-  const actualDateCol = header.findIndex(h => h.includes('actual') && h.includes('date'));
-  const daysDelayCol = header.findIndex(h => h.includes('delay') || h.includes('days'));
-  const reasonCol = header.findIndex(h => h === 'reason' || h.includes('churn') || h.includes('reason'));
+  const planVolumeCol = findInSlice(h => h.includes('plan') && h.includes('volume'));
+  const actualVolumeCol = findInSlice(h => h.includes('actual') && h.includes('volume'));
+  const planPriceCol = findInSlice(h => h.includes('plan') && h.includes('price'));
+  const actualPriceCol = findInSlice(h => h.includes('actual') && h.includes('price'));
+  const planDateCol = findInSlice(h => h.includes('plan') && h.includes('date'));
+  const actualDateCol = findInSlice(h => h.includes('actual') && h.includes('date'));
+  const daysDelayCol = findInSlice(h => h.includes('delay') || h.includes('days'));
+  const reasonCol = findInSlice(h => h === 'reason' || h.includes('churn') || h.includes('reason'));
   // FX sheet uses "FX (Plan)" and "FX (Act)" – "act" is short for actual
-  const planFxCol = header.findIndex(h => h.includes('plan') && (h.includes('fx') || h.includes('rate')));
-  const actualFxCol = header.findIndex(h => (h.includes('actual') || (h.includes('fx') && h.includes('act'))) && (h.includes('fx') || h.includes('rate')));
-  const fxChangeCol = header.findIndex(h => h.includes('fx change') || (h.includes('change') && h.includes('fx')));
+  const planFxCol = findInSlice(h => h.includes('plan') && (h.includes('fx') || h.includes('rate')));
+  const actualFxCol = findInSlice(h => (h.includes('actual') || (h.includes('fx') && h.includes('act'))) && (h.includes('fx') || h.includes('rate')));
+  const fxChangeCol = findInSlice(h => h.includes('fx change') || (h.includes('change') && h.includes('fx')));
+  const currencyCol = findInSlice(h => h === 'currency' || h.includes('ccy'));
+  const revenueComponentCol = findInSlice(h => h === 'revenue component' || (h.includes('revenue') && h.includes('component')));
+  const commentCol = findInSlice(h => h === 'comment' || h.includes('comment'));
 
   const valueCol = totalCol >= 0 ? totalCol : revLocalCol >= 0 ? revLocalCol : 1;
   const pCol = planCol >= 0 ? planCol : planVolumeCol >= 0 ? planVolumeCol : planPriceCol >= 0 ? planPriceCol : 1;
@@ -377,7 +484,7 @@ export function parseBreakdownCsv(csv: string, driverName: string): ClientDetail
       if (isFinite(delay)) d.daysDelay = delay;
     }
     if (reasonCol >= 0) d.churnReason = (row[reasonCol] || '').trim() || undefined;
-    if (planFxCol >= 0 && driver.includes('fx')) {
+    if (planFxCol >= 0) {
       const rate = parseNum(row[planFxCol] || '');
       if (isFinite(rate)) d.planFxRate = rate;
     }
@@ -393,6 +500,9 @@ export function parseBreakdownCsv(csv: string, driverName: string): ClientDetail
       const actualRate = parseNum(row[actualFxCol] || '');
       if (isFinite(planRate) && isFinite(actualRate)) d.fxChange = actualRate - planRate;
     }
+    if (currencyCol >= 0) d.currency = (row[currencyCol] || '').trim() || undefined;
+    if (revenueComponentCol >= 0) d.revenueComponent = (row[revenueComponentCol] || '').trim() || undefined;
+    if (commentCol >= 0) d.comment = (row[commentCol] || '').trim() || undefined;
     details.push(d);
   }
 
@@ -560,13 +670,13 @@ export interface InsightFromSheet {
 }
 
 /**
- * Insights sheet layout (GID 1794114721):
- * - Column E (index 4): Positive comments, starting row 10 (E10, E11, E12...)
- * - Column F (index 5): Negative comments, starting row 10 (F10, F11, F12...)
+ * Insights sheet layout (GID 874758246):
+ * - Column A (index 0): Positive comments, starting row 2 (A2, A3, A4...)
+ * - Column B (index 1): Challenges / negative comments, starting row 2 (B2, B3...)
  */
-const INSIGHTS_POS_COL = 4;  // E
-const INSIGHTS_NEG_COL = 5;  // F
-const INSIGHTS_START_ROW = 9; // 0-based (row 10 in sheet)
+const INSIGHTS_POS_COL = 0;  // A
+const INSIGHTS_NEG_COL = 1;  // B
+const INSIGHTS_START_ROW = 1; // 0-based (row 2 in sheet)
 
 export function parseInsightsCsv(csv: string): InsightFromSheet[] {
   const rows = parseCsv(csv);

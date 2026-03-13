@@ -268,7 +268,7 @@ function App() {
           />
         </div>
 
-        <div className="sales-waterfall-driver-row" style={{ marginBottom: '20px', display: 'grid', gridTemplateColumns: 'minmax(0, 3fr) minmax(0, 1fr)', gap: '24px', alignItems: 'stretch', minHeight: '380px', flexShrink: 0 }}>
+        <div className="sales-waterfall-driver-row" style={{ marginBottom: '20px', display: 'grid', gridTemplateColumns: 'minmax(0, 3fr) minmax(0, 1fr)', gap: '24px', alignItems: 'stretch', minHeight: '460px', flexShrink: 0 }}>
           <div style={{ minWidth: 0, display: 'flex', overflow: 'hidden' }}>
             <VarianceBridge
               key={activeTab}

@@ -45,6 +45,7 @@ export function VarianceBridge({ steps, viewType = 'monthly', clientType, select
   const [tooltipLoading, setTooltipLoading] = useState(false);
   const [tooltipAnchor, setTooltipAnchor] = useState<{ x: number; y: number } | null>(null);
   const stepsRef = useRef<BridgeStep[]>([]);
+  const prevStepsRef = useRef<BridgeStep[] | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const breakdownCacheRef = useRef<Record<string, ClientDetail[]>>({});
@@ -77,7 +78,8 @@ export function VarianceBridge({ steps, viewType = 'monthly', clientType, select
 
   const getBreakdownForStep = async (step: BridgeStep): Promise<ClientDetail[]> => {
     if (step.clientDetails && step.clientDetails.length > 0) return step.clientDetails;
-    const cacheKey = `${clientType ?? ''}-${step.label}-${(step.label === 'Fixed fee difference' || step.label === 'Unknown churn') ? (selectedMonth ?? '') : ''}`;
+    // Include month in cacheKey so month-switch always refreshes breakdowns
+    const cacheKey = `${clientType ?? ''}-${step.label}-${selectedMonth ?? ''}`;
     const cached = breakdownCacheRef.current[cacheKey];
     if (cached) return cached;
     const gid = getBreakdownGid(clientType, step.label);
@@ -88,7 +90,7 @@ export function VarianceBridge({ steps, viewType = 'monthly', clientType, select
         ? parseFixedFeeBreakdownCsv(csv, selectedMonth)
         : step.label === 'Unknown churn' && selectedMonth
           ? parseChurnBreakdownCsv(csv, selectedMonth)
-          : parseBreakdownCsv(csv, step.label);
+          : parseBreakdownCsv(csv, step.label, selectedMonth);
     if (details.length > 0) breakdownCacheRef.current[cacheKey] = details;
     return details;
   };
@@ -124,10 +126,35 @@ export function VarianceBridge({ steps, viewType = 'monthly', clientType, select
       return { ...s, start, end, isTotal: false };
     });
 
+    // Build previous series (for smooth animations) using current yScale later.
+    let prevSeriesByLabel: Record<string, { start: number; end: number; isTotal: boolean; value: number }> = {};
+    if (prevStepsRef.current && prevStepsRef.current.length > 0) {
+      let pr = 0;
+      const prevSteps = prevStepsRef.current;
+      for (let i = 0; i < prevSteps.length; i++) {
+        const ps = prevSteps[i];
+        if (i === 0) {
+          pr = ps.value;
+          prevSeriesByLabel[ps.label] = { start: 0, end: ps.value, isTotal: true, value: ps.value };
+          continue;
+        }
+        if (i === prevSteps.length - 1) {
+          prevSeriesByLabel[ps.label] = { start: 0, end: ps.value, isTotal: true, value: ps.value };
+          continue;
+        }
+        const start = pr;
+        const end = pr + ps.value;
+        pr = end;
+        prevSeriesByLabel[ps.label] = { start, end, isTotal: false, value: ps.value };
+      }
+    }
+
     const minY = Math.min(...series.map((s) => Math.min(s.start, s.end, s.value)));
     const maxY = Math.max(...series.map((s) => Math.max(s.start, s.end, s.value)));
     const span = maxY - minY || 1;
-    const yMin = Y_AXIS_FLOOR;
+    // Existing clients: keep fixed 500k floor to align with main bridge.
+    // New clients and other views: let the axis start closer to data (down to zero).
+    const yMin = clientType === 'existing-clients' ? Y_AXIS_FLOOR : Math.min(0, minY);
     const yMax = Math.max(yMin + 1, maxY + span * 0.15);
 
     const yScale = (v: number) => {
@@ -203,9 +230,20 @@ export function VarianceBridge({ steps, viewType = 'monthly', clientType, select
 
       const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
       rect.setAttribute('x', x.toString());
-      rect.setAttribute('y', top.toString());
+
+      const prev = prevSeriesByLabel[s.label];
+      const prevY0 = prev
+        ? (prev.isTotal ? yScale(yMin) : yScale(prev.start))
+        : yScale(yMin);
+      const prevY1 = prev
+        ? (prev.isTotal ? yScale(prev.value) : yScale(prev.end))
+        : yScale(yMin);
+      const prevTop = Math.min(prevY0, prevY1);
+      const prevHeight = Math.abs(prevY1 - prevY0);
+
+      rect.setAttribute('y', prevTop.toString());
       rect.setAttribute('width', barW.toString());
-      rect.setAttribute('height', Math.max(2, height).toString());
+      rect.setAttribute('height', Math.max(2, prevHeight).toString());
       rect.setAttribute('rx', '8');
       rect.setAttribute('ry', '8');
       rect.setAttribute('fill', fill);
@@ -214,6 +252,23 @@ export function VarianceBridge({ steps, viewType = 'monthly', clientType, select
       if (isDriver || hasClick) rect.setAttribute('data-step-index', i.toString());
       if (isDriver) rect.setAttribute('data-hoverable', '1');
       svg.appendChild(rect);
+
+      // Animate rect to its final position/height
+      try {
+        rect.animate(
+          [
+            { y: `${prevTop}px`, height: `${Math.max(2, prevHeight)}px` },
+            { y: `${top}px`, height: `${Math.max(2, height)}px` },
+          ],
+          { duration: 420, easing: 'cubic-bezier(0.22, 1, 0.36, 1)', fill: 'forwards' }
+        );
+        // Ensure final attributes are set for layout/hit-testing
+        rect.setAttribute('y', top.toString());
+        rect.setAttribute('height', Math.max(2, height).toString());
+      } catch {
+        rect.setAttribute('y', top.toString());
+        rect.setAttribute('height', Math.max(2, height).toString());
+      }
 
       if (i > 0 && i < n - 1) {
         const currStart = s.start;
@@ -227,6 +282,18 @@ export function VarianceBridge({ steps, viewType = 'monthly', clientType, select
         conn.setAttribute('stroke', 'rgba(30, 27, 75, 0.2)');
         conn.setAttribute('stroke-width', '2');
         svg.appendChild(conn);
+
+        // Connector line animation (fade-in + slight move)
+        try {
+          conn.setAttribute('opacity', '0.0');
+          conn.animate(
+            [{ opacity: 0, transform: 'translateY(-2px)' }, { opacity: 1, transform: 'translateY(0px)' }],
+            { duration: 260, easing: 'ease-out', fill: 'forwards' }
+          );
+          conn.setAttribute('opacity', '1');
+        } catch {
+          conn.setAttribute('opacity', '1');
+        }
       }
 
       const vLbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
@@ -240,6 +307,18 @@ export function VarianceBridge({ steps, viewType = 'monthly', clientType, select
       vLbl.textContent = formatMoney(s.value);
       svg.appendChild(vLbl);
 
+      // Value label animation
+      try {
+        vLbl.setAttribute('opacity', '0.0');
+        vLbl.animate(
+          [{ opacity: 0, transform: 'translateY(-4px)' }, { opacity: 1, transform: 'translateY(0px)' }],
+          { duration: 260, easing: 'ease-out', fill: 'forwards', delay: 80 }
+        );
+        vLbl.setAttribute('opacity', '1');
+      } catch {
+        vLbl.setAttribute('opacity', '1');
+      }
+
       const xLbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
       xLbl.setAttribute('x', (x + barW / 2).toString());
       xLbl.setAttribute('y', (H - padB + 20).toString());
@@ -250,6 +329,9 @@ export function VarianceBridge({ steps, viewType = 'monthly', clientType, select
       xLbl.textContent = s.label;
       svg.appendChild(xLbl);
     }
+
+    // Save as previous for next update animation
+    prevStepsRef.current = transformedSteps;
 
     if (svgRef.current) {
       const oldBars = svgRef.current.querySelectorAll('rect[data-step-index]');

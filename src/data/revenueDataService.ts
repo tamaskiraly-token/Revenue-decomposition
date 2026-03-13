@@ -192,7 +192,7 @@ export async function loadContributorsByClient(
       const csv = await fetchSheetCsv(gid);
       const details = stepLabel === 'Fixed fee difference'
         ? parseFixedFeeBreakdownCsv(csv, selectedMonth)
-        : parseBreakdownCsv(csv, stepLabel);
+        : parseBreakdownCsv(csv, stepLabel, selectedMonth);
       for (const d of details) {
         const name = (d.clientName ?? '').trim() || 'Unknown';
         const v = typeof d.variance === 'number' && Number.isFinite(d.variance) ? d.variance : 0;

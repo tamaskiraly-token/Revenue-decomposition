@@ -56,7 +56,7 @@ export const STEP_LABELS_WITH_BREAKDOWN = [
 ] as const;
 
 /** GID for insights sheet (positive and negative comments) */
-export const INSIGHTS_GID = 1794114721;
+export const INSIGHTS_GID = 874758246;
 
 /** Map any step label (e.g. "Volume impact") to BREAKDOWN_GIDS key for lookup */
 export const STEP_LABEL_TO_BREAKDOWN_KEY: Record<string, string> = {
