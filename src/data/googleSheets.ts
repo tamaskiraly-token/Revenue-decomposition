@@ -235,9 +235,13 @@ export function parseWaterfallCsv(csv: string, monthKey?: string): BridgeStepFro
       if (!isFinite(value)) continue;
 
       if (!steps.some(s => s.label === normalizedLabel)) {
-        // Only flip Fixed fee difference sign to match sheet convention.
-        // Residual must keep its original sign (positive stays positive).
-        const signAdjusted = normalizedLabel === 'Fixed fee difference' ? -value : value;
+        // Flip Fixed fee difference and Unknown churn signs to match sheet convention
+        // (they are usually stored as positive magnitudes for negative effects).
+        // Residual is handled separately and must keep its computed sign.
+        const signAdjusted =
+          normalizedLabel === 'Fixed fee difference' || normalizedLabel === 'Unknown churn'
+            ? -value
+            : value;
         steps.push({
           label: normalizedLabel,
           value: signAdjusted,
@@ -306,9 +310,10 @@ export function parseWaterfallCsv(csv: string, monthKey?: string): BridgeStepFro
           if (isFinite(v)) { value = v; break; }
         }
         if (!isFinite(value)) continue;
-        // Only flip Fixed fee difference sign to match sheet convention.
-        // Residual must keep its original sign (positive stays positive).
-        const signAdjusted = normalizedLabel === 'Fixed fee difference' ? -value : value;
+        const signAdjusted =
+          normalizedLabel === 'Fixed fee difference' || normalizedLabel === 'Unknown churn'
+            ? -value
+            : value;
         steps.push({
           label: normalizedLabel,
           value: signAdjusted,
